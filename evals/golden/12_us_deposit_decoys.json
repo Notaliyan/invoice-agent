@@ -1,0 +1,50 @@
+{
+  "id": "12_us_deposit_decoys",
+  "description": "Invoice with a deposit already paid. The invoice total is 3,604.73; the balance due, the deposit, its date and the PO reference are all decoys.",
+  "tags": [
+    "invoice",
+    "usd",
+    "decoy_amounts",
+    "iso_dates",
+    "hard"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Lindqvist Design Studio LLC",
+      "tax_id": null
+    },
+    "customer": {
+      "name": "Marlow & Finch Publishing"
+    },
+    "invoice_number": "INV-0092",
+    "issue_date": "2024-12-03",
+    "due_date": "2024-12-17",
+    "currency": "USD",
+    "line_items": [
+      {
+        "description": "Book cover design",
+        "quantity": 1,
+        "unit_price": 1800.0,
+        "amount": 1800.0
+      },
+      {
+        "description": "Interior layout (per page)",
+        "quantity": 240,
+        "unit_price": 4.5,
+        "amount": 1080.0
+      },
+      {
+        "description": "Revision rounds",
+        "quantity": 3,
+        "unit_price": 150.0,
+        "amount": 450.0
+      }
+    ],
+    "subtotal": 3330.0,
+    "tax_amount": 274.73,
+    "tax_rate": 8.25,
+    "total": 3604.73
+  }
+}

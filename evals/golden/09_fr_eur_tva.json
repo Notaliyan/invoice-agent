@@ -1,0 +1,50 @@
+{
+  "id": "09_fr_eur_tva",
+  "description": "French invoice. Thousands are separated by a space (1 260,00), which is exactly the format that tempts a parser into merging table columns.",
+  "tags": [
+    "invoice",
+    "eur",
+    "french",
+    "space_thousands",
+    "hard"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Atelier Lumière SARL",
+      "tax_id": "FR40123456789"
+    },
+    "customer": {
+      "name": "Boulangerie Marceau"
+    },
+    "invoice_number": "F-2024-0356",
+    "issue_date": "2024-05-17",
+    "due_date": "2024-06-16",
+    "currency": "EUR",
+    "line_items": [
+      {
+        "description": "Conception luminaire sur mesure",
+        "quantity": 3,
+        "unit_price": 420.0,
+        "amount": 1260.0
+      },
+      {
+        "description": "Installation sur site",
+        "quantity": 5,
+        "unit_price": 85.0,
+        "amount": 425.0
+      },
+      {
+        "description": "Ampoules LED (lot de 10)",
+        "quantity": 4,
+        "unit_price": 39.9,
+        "amount": 159.6
+      }
+    ],
+    "subtotal": 1844.6,
+    "tax_amount": 368.92,
+    "tax_rate": 20.0,
+    "total": 2213.52
+  }
+}

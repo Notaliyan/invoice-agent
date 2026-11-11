@@ -1,0 +1,24 @@
+Atelier Lumière SARL
+18 rue des Capucins, 69001 Lyon, France
+SIRET : 812 345 678 00021
+N° TVA : FR40123456789
+
+FACTURE N° F-2024-0356
+
+Date de facture : 17/05/2024
+Échéance : 16/06/2024
+
+Client :
+Boulangerie Marceau
+5 place Bellecour, 69002 Lyon
+
+Désignation                              Qté   Prix unitaire HT    Montant HT
+Conception luminaire sur mesure            3             420,00      1 260,00
+Installation sur site                      5              85,00        425,00
+Ampoules LED (lot de 10)                   4              39,90        159,60
+
+                                         Total HT                    1 844,60 €
+                                         TVA 20 %                      368,92 €
+                                         Total TTC                   2 213,52 €
+
+Paiement par virement. IBAN : FR76 3000 6000 0112 3456 7890 189

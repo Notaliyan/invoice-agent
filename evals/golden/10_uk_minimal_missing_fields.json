@@ -1,0 +1,48 @@
+{
+  "id": "10_uk_minimal_missing_fields",
+  "description": "Informal sole-trader invoice with no invoice number, no due date, no named customer, no tax and no subtotal. Every one of those must come back null: this case exists to measure hallucination.",
+  "tags": [
+    "invoice",
+    "gbp",
+    "missing_fields",
+    "hallucination_probe",
+    "medium"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Okafor Plumbing",
+      "tax_id": null
+    },
+    "customer": null,
+    "invoice_number": null,
+    "issue_date": "2024-11-02",
+    "due_date": null,
+    "currency": "GBP",
+    "line_items": [
+      {
+        "description": "Labour",
+        "quantity": 3,
+        "unit_price": 55.0,
+        "amount": 165.0
+      },
+      {
+        "description": "Mixer tap (supplied)",
+        "quantity": 1,
+        "unit_price": 89.0,
+        "amount": 89.0
+      },
+      {
+        "description": "Call-out fee",
+        "quantity": 1,
+        "unit_price": 40.0,
+        "amount": 40.0
+      }
+    ],
+    "subtotal": null,
+    "tax_amount": null,
+    "tax_rate": null,
+    "total": 294.0
+  }
+}

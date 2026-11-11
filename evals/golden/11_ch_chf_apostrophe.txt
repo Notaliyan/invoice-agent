@@ -1,0 +1,24 @@
+Alpenblick Engineering AG
+Monbijoustrasse 61, 3007 Bern, Schweiz
+UID: CHE-123.456.789
+
+RECHNUNG
+
+Rechnung Nr.: 24-0778
+Datum: 09.10.2024
+Zahlbar bis: 08.11.2024
+
+Kunde:
+Säntis Bergbahnen AG
+Schwägalp 1, 9107 Urnäsch
+
+Leistung                              Menge     Ansatz        Betrag CHF
+Tragwerksanalyse (Std.)                  24     165.00          3'960.00
+Baustellenbegehung                        2     480.00            960.00
+Prüfbericht                               1   1'250.00          1'250.00
+
+                                      Zwischentotal             6'170.00
+                                      MWST 8.1%                   499.77
+                                      Total CHF                 6'669.77
+
+Zahlbar innert 30 Tagen. IBAN: CH93 0076 2011 6238 5295 7

@@ -1,0 +1,49 @@
+{
+  "id": "02_us_usd_sales_tax",
+  "description": "US invoice, month-first dates that are ambiguous without context, $ symbol.",
+  "tags": [
+    "invoice",
+    "usd",
+    "ambiguous_dates",
+    "easy"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Kestrel Supply Co.",
+      "tax_id": "47-2938471"
+    },
+    "customer": {
+      "name": "Rivera Fabrication LLC"
+    },
+    "invoice_number": "KS-88213",
+    "issue_date": "2024-03-04",
+    "due_date": "2024-04-03",
+    "currency": "USD",
+    "line_items": [
+      {
+        "description": "Steel bracket, 4in (box of 50)",
+        "quantity": 14,
+        "unit_price": 62.4,
+        "amount": 873.6
+      },
+      {
+        "description": "Anti-vibration mount AVM-2",
+        "quantity": 6,
+        "unit_price": 118.75,
+        "amount": 712.5
+      },
+      {
+        "description": "Freight, expedited",
+        "quantity": 1,
+        "unit_price": 85.0,
+        "amount": 85.0
+      }
+    ],
+    "subtotal": 1671.1,
+    "tax_amount": 142.04,
+    "tax_rate": 8.5,
+    "total": 1813.14
+  }
+}

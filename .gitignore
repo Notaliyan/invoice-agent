@@ -17,6 +17,10 @@ uploads/
 *.db
 *.sqlite3
 
+# Eval runs: history.jsonl is committed (it is the quality record); the
+# per-run detail dumps are not.
+evals/results/*.json
+
 # OS / editors
 .DS_Store
 Thumbs.db

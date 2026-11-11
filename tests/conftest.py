@@ -69,6 +69,9 @@ def settings() -> Settings:
         openai_model="fake-model",
         agent_max_steps=6,
         page_preview_chars=400,
+        # Never trace from the test suite, even if the developer's .env has keys.
+        langfuse_public_key="",
+        langfuse_secret_key="",
     )
 
 

@@ -1,0 +1,22 @@
+Kestrel Supply Co.
+880 Harrison St, San Francisco, CA 94107
+EIN: 47-2938471   ar@kestrelsupply.com
+
+INVOICE
+Invoice #: KS-88213
+Invoice Date: 03/04/2024
+Due Date: 04/03/2024
+Terms: Net 30
+
+Bill To:
+Rivera Fabrication LLC
+1200 Industrial Pkwy, Reno, NV 89502
+
+Item  Description                       Qty    Unit Price      Amount
+1     Steel bracket, 4in (box of 50)      14        $62.40      $873.60
+2     Anti-vibration mount AVM-2           6       $118.75      $712.50
+3     Freight, expedited                   1        $85.00       $85.00
+
+                                          Subtotal          $1,671.10
+                                          Sales tax 8.5%       $142.04
+                                          Total Due          $1,813.14

@@ -89,9 +89,12 @@ class ToolCallRecord(BaseModel):
 
 
 class AgentTrace(BaseModel):
-    """What the agent actually did. Phase 3 ships this to Langfuse."""
+    """What the agent actually did. The same steps are mirrored to Langfuse
+    when tracing is configured; `langfuse_trace_id` links the two."""
 
     model: str
+    prompt_version: str = ""
+    langfuse_trace_id: str | None = None
     steps: int
     stop_reason: str
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)

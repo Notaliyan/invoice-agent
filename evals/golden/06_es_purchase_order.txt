@@ -1,0 +1,28 @@
+Altamira Robotics S.L.
+Carrer de Pallars 193, 08005 Barcelona, Spain
+NIF: ESB66123456
+
+PURCHASE ORDER
+
+PO Number: PO-2024-00581
+Order date: 2024-06-11
+Requested delivery date: 2024-07-02
+Requisition: REQ-3391
+
+Supplier:
+Ferrum Componentes S.A.
+Gran Vía 45, 48011 Bilbao, Spain
+
+Ship to:
+Altamira Robotics S.L. - Warehouse 2, Barcelona
+
+Line  Item                           Qty    Unit price        Amount
+1     Linear actuator LA-200          20        145,00      2.900,00
+2     Mounting plate MP-7             40         18,25        730,00
+3     Cable harness CH-3              20         32,40        648,00
+
+                                     Subtotal               4.278,00 EUR
+                                     IVA 21%                  898,38 EUR
+                                     Order total            5.176,38 EUR
+
+Authorised by: M. Soler, Purchasing

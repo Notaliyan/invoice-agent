@@ -28,6 +28,17 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Langfuse tracing. Optional: with either key missing the agent runs exactly
+    # as before and nothing is sent anywhere.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_environment: str = "development"
+
+    @property
+    def langfuse_enabled(self) -> bool:
+        return bool(self.langfuse_public_key and self.langfuse_secret_key)
+
 
 @lru_cache
 def get_settings() -> Settings:

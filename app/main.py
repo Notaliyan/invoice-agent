@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -18,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.agent.runner import AgentError, ExtractionAgent
 from app.config import get_settings
+from app.observability import flush as flush_langfuse
 from app.pdf import PdfDocument, PdfExtractionError, extract_pdf
 from app.schemas import ProcessResponse
 
@@ -28,13 +31,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("app")
 
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    yield
+    # Langfuse exports in the background; don't drop the tail on shutdown.
+    flush_langfuse(settings)
+
+
 app = FastAPI(
     title="Document Intelligence Agent",
-    version="0.1.0",
+    version="0.2.0",
     description=(
         "Upload a document; a tool-calling agent reads it, validates the "
         "arithmetic, and returns structured JSON."
     ),
+    lifespan=lifespan,
 )
 
 
@@ -49,6 +60,7 @@ def health() -> dict[str, object]:
         "status": "ok",
         "model": settings.openai_model,
         "openai_key_configured": bool(settings.openai_api_key),
+        "langfuse_tracing": settings.langfuse_enabled,
     }
 
 

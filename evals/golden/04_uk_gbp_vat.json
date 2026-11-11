@@ -1,0 +1,49 @@
+{
+  "id": "04_uk_gbp_vat",
+  "description": "UK invoice, 20% VAT, dates written with month names, spaced VAT number.",
+  "tags": [
+    "invoice",
+    "gbp",
+    "month_name_dates",
+    "easy"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Thornbury & Hale Ltd",
+      "tax_id": "GB293884107"
+    },
+    "customer": {
+      "name": "Castlegate Dental Practice"
+    },
+    "invoice_number": "TH/2024/0932",
+    "issue_date": "2024-03-05",
+    "due_date": "2024-04-04",
+    "currency": "GBP",
+    "line_items": [
+      {
+        "description": "Quarterly bookkeeping",
+        "quantity": 1,
+        "unit_price": 450.0,
+        "amount": 450.0
+      },
+      {
+        "description": "Payroll processing (per employee)",
+        "quantity": 9,
+        "unit_price": 12.5,
+        "amount": 112.5
+      },
+      {
+        "description": "Year-end accounts preparation",
+        "quantity": 1,
+        "unit_price": 780.0,
+        "amount": 780.0
+      }
+    ],
+    "subtotal": 1342.5,
+    "tax_amount": 268.5,
+    "tax_rate": 20.0,
+    "total": 1611.0
+  }
+}

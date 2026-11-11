@@ -1,5 +1,12 @@
 """System and user prompts for the extraction agent."""
 
+import hashlib
+
+# Bump this whenever you change any prompt below. It is stamped on every
+# Langfuse trace and names each eval run, which is what makes "did that prompt
+# change help?" answerable.
+PROMPT_VERSION = "v1"
+
 SYSTEM_PROMPT = """\
 You are a document extraction agent. You are given a business document (invoice,
 receipt, purchase order, or contract) and must return validated structured data.
@@ -81,3 +88,12 @@ FINAL_STEP_PROMPT = (
     "This is your final step. Call submit_extraction now with the best values you "
     "have, set `confidence` low, and explain in `notes` what you could not verify."
 )
+
+# A hash of the actual prompt text, recorded next to PROMPT_VERSION. If someone
+# edits a prompt and forgets to bump the version, the fingerprint still changes,
+# so two runs that look like the same version cannot silently differ.
+PROMPT_FINGERPRINT = hashlib.sha256(
+    "\x00".join(
+        [SYSTEM_PROMPT, build_user_prompt("", 0, 0, ""), NUDGE_PROMPT, FINAL_STEP_PROMPT]
+    ).encode("utf-8")
+).hexdigest()[:8]

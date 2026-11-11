@@ -1,0 +1,67 @@
+{
+  "id": "08_us_multipage",
+  "description": "Two pages: line items continue onto page 2 and the totals are only there. The agent sees a preview of page 1 only, so it must use its reading tools.",
+  "tags": [
+    "invoice",
+    "usd",
+    "multi_page",
+    "hard"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Brightwater Print & Pack Inc.",
+      "tax_id": "93-1048827"
+    },
+    "customer": {
+      "name": "Juniper Lane Coffee Roasters"
+    },
+    "invoice_number": "BW-204417",
+    "issue_date": "2024-09-12",
+    "due_date": "2024-10-12",
+    "currency": "USD",
+    "line_items": [
+      {
+        "description": "Custom printed coffee bags, 12oz",
+        "quantity": 5000,
+        "unit_price": 0.38,
+        "amount": 1900.0
+      },
+      {
+        "description": "Kraft shipping boxes",
+        "quantity": 400,
+        "unit_price": 1.15,
+        "amount": 460.0
+      },
+      {
+        "description": "Label rolls, matte",
+        "quantity": 25,
+        "unit_price": 14.6,
+        "amount": 365.0
+      },
+      {
+        "description": "Tissue wrap, branded",
+        "quantity": 60,
+        "unit_price": 6.75,
+        "amount": 405.0
+      },
+      {
+        "description": "Plate setup fee",
+        "quantity": 1,
+        "unit_price": 150.0,
+        "amount": 150.0
+      },
+      {
+        "description": "Freight",
+        "quantity": 1,
+        "unit_price": 212.4,
+        "amount": 212.4
+      }
+    ],
+    "subtotal": 3492.4,
+    "tax_amount": 227.01,
+    "tax_rate": 6.5,
+    "total": 3719.41
+  }
+}

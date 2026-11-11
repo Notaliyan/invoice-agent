@@ -1,0 +1,49 @@
+{
+  "id": "06_es_purchase_order",
+  "description": "Purchase order issued by the buyer. The vendor is the supplier, the only tax ID on the page belongs to the buyer, and the delivery date is not a due date.",
+  "tags": [
+    "purchase_order",
+    "eur",
+    "party_roles",
+    "hard"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "purchase_order",
+    "vendor": {
+      "name": "Ferrum Componentes S.A.",
+      "tax_id": null
+    },
+    "customer": {
+      "name": "Altamira Robotics S.L."
+    },
+    "invoice_number": "PO-2024-00581",
+    "issue_date": "2024-06-11",
+    "due_date": null,
+    "currency": "EUR",
+    "line_items": [
+      {
+        "description": "Linear actuator LA-200",
+        "quantity": 20,
+        "unit_price": 145.0,
+        "amount": 2900.0
+      },
+      {
+        "description": "Mounting plate MP-7",
+        "quantity": 40,
+        "unit_price": 18.25,
+        "amount": 730.0
+      },
+      {
+        "description": "Cable harness CH-3",
+        "quantity": 20,
+        "unit_price": 32.4,
+        "amount": 648.0
+      }
+    ],
+    "subtotal": 4278.0,
+    "tax_amount": 898.38,
+    "tax_rate": 21.0,
+    "total": 5176.38
+  }
+}

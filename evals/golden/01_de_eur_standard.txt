@@ -1,0 +1,24 @@
+Nordlicht Systeme GmbH
+Hafenstraße 14, 20359 Hamburg, Germany
+USt-IdNr: DE812345678   billing@nordlicht-systeme.de
+
+RECHNUNG / INVOICE
+Rechnungsnummer: NLS-2024-0417
+Rechnungsdatum: 14.03.2024
+Fällig am: 13.04.2024
+Zahlungsziel: 30 Tage netto
+
+Rechnung an:
+Meridian Analytics AG
+Bahnhofplatz 3, 8001 Zürich, Switzerland
+
+Pos  Beschreibung                        Menge   Einzelpreis      Betrag
+1    Sensor gateway SG-40                    12       184,50     2.214,00
+2    Installation und Inbetriebnahme          8       125,00     1.000,00
+3    Wartungsvertrag 12 Monate                1       960,00       960,00
+
+                                   Zwischensumme (netto)      4.174,00 EUR
+                                   MwSt 19%                     793,06 EUR
+                                   Gesamtbetrag               4.967,06 EUR
+
+IBAN: DE44 5001 0517 5407 3249 31   BIC: INGDDEFFXXX

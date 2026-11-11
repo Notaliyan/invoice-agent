@@ -1,0 +1,27 @@
+Lindqvist Design Studio LLC
+412 E 6th Street, Suite 300, Austin, TX 78701
+hello@lindqviststudio.com
+
+INVOICE
+
+Invoice: INV-0092
+Date: 2024-12-03
+Due: 2024-12-17
+Your PO reference: PO-77120
+
+Bill to:
+Marlow & Finch Publishing
+90 Bedford Street, Boston, MA 02111
+
+Description                           Qty         Rate         Amount
+Book cover design                       1    $1,800.00      $1,800.00
+Interior layout (per page)            240        $4.50      $1,080.00
+Revision rounds                         3      $150.00        $450.00
+
+                                      Subtotal              $3,330.00
+                                      Sales Tax 8.25%         $274.73
+                                      Invoice Total         $3,604.73
+
+                                      Less deposit received
+                                      (11/15/2024)         -$1,000.00
+                                      Balance Due           $2,604.73

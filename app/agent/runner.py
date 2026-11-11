@@ -2,7 +2,8 @@
 
 A plain while-loop over OpenAI chat completions with tool calling. No framework:
 the loop is ~60 lines and being able to read it is the point. Every tool call is
-recorded into an `AgentTrace`, which is what Phase 3 will ship to Langfuse.
+recorded into an `AgentTrace`, and every model call and tool call is mirrored to
+Langfuse (see app/observability.py) when keys are configured.
 """
 
 from __future__ import annotations
@@ -17,11 +18,14 @@ from openai import OpenAI
 from app.agent.prompts import (
     FINAL_STEP_PROMPT,
     NUDGE_PROMPT,
+    PROMPT_FINGERPRINT,
+    PROMPT_VERSION,
     SYSTEM_PROMPT,
     build_user_prompt,
 )
 from app.agent.tools import TERMINAL_TOOL, TOOL_FUNCTIONS, TOOL_SPECS, ToolContext
 from app.config import Settings, get_settings
+from app.observability import get_langfuse, observation, propagate
 from app.pdf import PdfDocument
 from app.schemas import AgentTrace, ExtractionResult, ToolCallRecord, ValidationReport
 
@@ -86,6 +90,29 @@ def _summarise(name: str, result: dict[str, Any]) -> str:
     return "ok"
 
 
+def _message_for_trace(message: Any) -> dict[str, Any]:
+    """The assistant turn as plain data, for the generation's output."""
+    return {
+        "role": "assistant",
+        "content": message.content,
+        "tool_calls": [
+            {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
+            for tc in (message.tool_calls or [])
+        ],
+    }
+
+
+def _trace_metadata(trace: AgentTrace | None) -> dict[str, Any]:
+    if trace is None:
+        return {}
+    return {
+        "steps": trace.steps,
+        "stop_reason": trace.stop_reason,
+        "tool_sequence": [c.tool for c in trace.tool_calls],
+        "failed_tool_calls": sum(1 for c in trace.tool_calls if not c.ok),
+    }
+
+
 class ExtractionAgent:
     def __init__(
         self,
@@ -93,6 +120,7 @@ class ExtractionAgent:
         settings: Settings | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        self.langfuse = get_langfuse(self.settings)
         if client is not None:
             self.client = client
         else:
@@ -101,6 +129,61 @@ class ExtractionAgent:
             self.client = OpenAI(api_key=self.settings.openai_api_key)
 
     def run(self, doc: PdfDocument) -> AgentResult:
+        """Run the agent on one document, as a single Langfuse trace."""
+        model = self.settings.openai_model
+        with (
+            propagate(
+                self.langfuse,
+                version=PROMPT_VERSION,
+                tags=[f"prompt:{PROMPT_VERSION}", f"model:{model}"],
+                metadata={
+                    "prompt_version": PROMPT_VERSION,
+                    "prompt_fingerprint": PROMPT_FINGERPRINT,
+                    "model": model,
+                },
+            ),
+            observation(
+                self.langfuse,
+                name="invoice-extraction",
+                as_type="agent",
+                input={
+                    "filename": doc.filename,
+                    "pages": doc.page_count,
+                    "chars": doc.char_count,
+                },
+            ) as root,
+        ):
+            try:
+                result = self._loop(doc, trace_id=root.trace_id)
+            except AgentError as exc:
+                root.update(
+                    level="ERROR",
+                    status_message=str(exc),
+                    metadata=_trace_metadata(exc.trace),
+                )
+                root.score_trace(name="extraction_succeeded", value=0, data_type="BOOLEAN")
+                raise
+
+            # Scores that need no ground truth, so production traffic is scored
+            # too. Accuracy against labels comes from the eval run (evals/).
+            root.update(
+                output=result.extraction.model_dump(mode="json"),
+                metadata=_trace_metadata(result.trace),
+            )
+            root.score_trace(name="extraction_succeeded", value=1, data_type="BOOLEAN")
+            root.score_trace(
+                name="validation_passed",
+                value=1 if result.validation.passed else 0,
+                data_type="BOOLEAN",
+                comment="; ".join(
+                    f"{c.name}: {c.detail}" for c in result.validation.checks if not c.passed
+                )
+                or None,
+            )
+            root.score_trace(name="model_confidence", value=result.extraction.confidence)
+            return result
+
+    def _loop(self, doc: PdfDocument, trace_id: str | None = None) -> AgentResult:
         ctx = ToolContext(doc=doc)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -125,20 +208,34 @@ class ExtractionAgent:
             if step == max_steps:
                 messages.append({"role": "user", "content": FINAL_STEP_PROMPT})
 
-            response = self.client.chat.completions.create(
+            with observation(
+                self.langfuse,
+                name=f"llm-step-{step}",
+                as_type="generation",
                 model=self.settings.openai_model,
-                messages=messages,
-                tools=TOOL_SPECS,
-                tool_choice="auto",
-                temperature=self.settings.agent_temperature,
-            )
+                model_parameters={"temperature": self.settings.agent_temperature},
+                input=messages,
+                metadata={"step": step, "final_step": step == max_steps},
+            ) as generation:
+                response = self.client.chat.completions.create(
+                    model=self.settings.openai_model,
+                    messages=messages,
+                    tools=TOOL_SPECS,
+                    tool_choice="auto",
+                    temperature=self.settings.agent_temperature,
+                )
 
-            usage = getattr(response, "usage", None)
-            if usage:
-                prompt_tokens += usage.prompt_tokens or 0
-                completion_tokens += usage.completion_tokens or 0
+                usage = getattr(response, "usage", None)
+                step_prompt = (usage.prompt_tokens or 0) if usage else 0
+                step_completion = (usage.completion_tokens or 0) if usage else 0
+                prompt_tokens += step_prompt
+                completion_tokens += step_completion
 
-            message = response.choices[0].message
+                message = response.choices[0].message
+                generation.update(
+                    output=_message_for_trace(message),
+                    usage_details={"input": step_prompt, "output": step_completion},
+                )
 
             if not message.tool_calls:
                 logger.debug("step %s: model returned prose, nudging", step)
@@ -181,6 +278,8 @@ class ExtractionAgent:
 
         trace = AgentTrace(
             model=self.settings.openai_model,
+            prompt_version=PROMPT_VERSION,
+            langfuse_trace_id=trace_id,
             steps=step,
             stop_reason=stop_reason,
             tool_calls=tool_calls,
@@ -206,18 +305,38 @@ class ExtractionAgent:
         name = tool_call.function.name
         started = time.perf_counter()
 
+        with observation(
+            self.langfuse,
+            name=name,
+            as_type="tool",
+            input=tool_call.function.arguments,
+            metadata={"step": step},
+        ) as span:
+            arguments, payload = self._call_tool(ctx, name, tool_call.function.arguments)
+            record = self._record(step, name, arguments, payload, started)
+            span.update(
+                input=arguments or tool_call.function.arguments,
+                output=_serialise(payload),
+                level="DEFAULT" if record.ok else "WARNING",
+                status_message=None if record.ok else record.result_summary,
+            )
+        return record, payload
+
+    @staticmethod
+    def _call_tool(
+        ctx: ToolContext, name: str, raw_arguments: str | None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Run one tool. Every failure comes back as an error payload."""
         try:
-            arguments = json.loads(tool_call.function.arguments or "{}")
+            arguments = json.loads(raw_arguments or "{}")
         except json.JSONDecodeError as exc:
-            payload = {"error": f"arguments were not valid JSON: {exc}"}
-            return self._record(step, name, {}, payload, started), payload
+            return {}, {"error": f"arguments were not valid JSON: {exc}"}
 
         fn = TOOL_FUNCTIONS.get(name)
         if fn is None:
-            payload = {
+            return arguments, {
                 "error": f"unknown tool {name!r}; available: {sorted(TOOL_FUNCTIONS)}"
             }
-            return self._record(step, name, arguments, payload, started), payload
 
         ctx.calls.append(name)
         try:
@@ -227,8 +346,7 @@ class ExtractionAgent:
         except Exception as exc:  # a tool crash must not kill the run
             logger.exception("tool %s raised", name)
             payload = {"error": f"{name} failed: {type(exc).__name__}: {exc}"}
-
-        return self._record(step, name, arguments, payload, started), payload
+        return arguments, payload
 
     @staticmethod
     def _record(

@@ -1,0 +1,49 @@
+{
+  "id": "01_de_eur_standard",
+  "description": "Well-formed German invoice, 19% VAT, day-first dates, EU number format.",
+  "tags": [
+    "invoice",
+    "eur",
+    "german",
+    "easy"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Nordlicht Systeme GmbH",
+      "tax_id": "DE812345678"
+    },
+    "customer": {
+      "name": "Meridian Analytics AG"
+    },
+    "invoice_number": "NLS-2024-0417",
+    "issue_date": "2024-03-14",
+    "due_date": "2024-04-13",
+    "currency": "EUR",
+    "line_items": [
+      {
+        "description": "Sensor gateway SG-40",
+        "quantity": 12,
+        "unit_price": 184.5,
+        "amount": 2214.0
+      },
+      {
+        "description": "Installation und Inbetriebnahme",
+        "quantity": 8,
+        "unit_price": 125.0,
+        "amount": 1000.0
+      },
+      {
+        "description": "Wartungsvertrag 12 Monate",
+        "quantity": 1,
+        "unit_price": 960.0,
+        "amount": 960.0
+      }
+    ],
+    "subtotal": 4174.0,
+    "tax_amount": 793.06,
+    "tax_rate": 19.0,
+    "total": 4967.06
+  }
+}

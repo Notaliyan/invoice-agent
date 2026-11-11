@@ -1,0 +1,47 @@
+{
+  "id": "05_us_receipt",
+  "description": "Till receipt, not an invoice: no customer, no due date, and decoy amounts (cash tendered, change due) that are not the total.",
+  "tags": [
+    "receipt",
+    "usd",
+    "decoy_amounts",
+    "medium"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "receipt",
+    "vendor": {
+      "name": "Harbor Hardware",
+      "tax_id": null
+    },
+    "customer": null,
+    "invoice_number": "448120",
+    "issue_date": "2024-07-19",
+    "due_date": null,
+    "currency": "USD",
+    "line_items": [
+      {
+        "description": "Wood screws #8 2in (100ct)",
+        "quantity": 2,
+        "unit_price": 7.49,
+        "amount": 14.98
+      },
+      {
+        "description": "Paint roller kit",
+        "quantity": 1,
+        "unit_price": 18.99,
+        "amount": 18.99
+      },
+      {
+        "description": "Interior primer 1 gal",
+        "quantity": 1,
+        "unit_price": 27.5,
+        "amount": 27.5
+      }
+    ],
+    "subtotal": 61.47,
+    "tax_amount": 4.46,
+    "tax_rate": 7.25,
+    "total": 65.93
+  }
+}

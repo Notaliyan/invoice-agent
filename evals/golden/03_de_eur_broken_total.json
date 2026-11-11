@@ -1,0 +1,44 @@
+{
+  "id": "03_de_eur_broken_total",
+  "description": "The stated total is 45.00 higher than subtotal + tax. The correct extraction reports what the document says rather than silently fixing it.",
+  "tags": [
+    "invoice",
+    "eur",
+    "german",
+    "arithmetic_mismatch",
+    "hard"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Halden Werkzeug GmbH",
+      "tax_id": "DE119876543"
+    },
+    "customer": {
+      "name": "Brandt Montage GmbH"
+    },
+    "invoice_number": "HW-7741",
+    "issue_date": "2024-09-02",
+    "due_date": null,
+    "currency": "EUR",
+    "line_items": [
+      {
+        "description": "Drehmomentschlüssel DS-9",
+        "quantity": 4,
+        "unit_price": 212.0,
+        "amount": 848.0
+      },
+      {
+        "description": "Ersatzteilset ETS-14",
+        "quantity": 3,
+        "unit_price": 96.5,
+        "amount": 289.5
+      }
+    ],
+    "subtotal": 1137.5,
+    "tax_amount": 216.13,
+    "tax_rate": 19.0,
+    "total": 1398.63
+  }
+}

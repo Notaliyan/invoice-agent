@@ -1,0 +1,43 @@
+{
+  "id": "07_nl_reverse_charge",
+  "description": "Intra-EU reverse charge: VAT is explicitly stated as 0% / 0,00, so tax is zero, not missing. Dates are day-first with dashes.",
+  "tags": [
+    "invoice",
+    "eur",
+    "zero_tax",
+    "medium"
+  ],
+  "source": "synthetic",
+  "expected": {
+    "document_type": "invoice",
+    "vendor": {
+      "name": "Polder Data B.V.",
+      "tax_id": "NL861234567B01"
+    },
+    "customer": {
+      "name": "Rheinwerk Logistik GmbH"
+    },
+    "invoice_number": "2024-1187",
+    "issue_date": "2024-08-22",
+    "due_date": "2024-09-21",
+    "currency": "EUR",
+    "line_items": [
+      {
+        "description": "Data pipeline consulting",
+        "quantity": 36,
+        "unit_price": 135.0,
+        "amount": 4860.0
+      },
+      {
+        "description": "Cloud infrastructure audit",
+        "quantity": 1,
+        "unit_price": 2400.0,
+        "amount": 2400.0
+      }
+    ],
+    "subtotal": 7260.0,
+    "tax_amount": 0.0,
+    "tax_rate": 0.0,
+    "total": 7260.0
+  }
+}
