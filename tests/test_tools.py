@@ -220,3 +220,10 @@ def test_valid_submission_is_accepted(invoice_doc):
     assert ctx.result.currency == "EUR"
     assert ctx.result.issue_date.isoformat() == "2024-03-14"
     assert len(ctx.result.line_items) == 3
+
+
+def test_validate_amounts_rejects_line_items_that_are_not_objects(invoice_doc):
+    ctx = ToolContext(doc=invoice_doc)
+    out = tool_validate_amounts(ctx, total=100.0, line_items=["Widget 2 x 50.00 = 100.00"])
+    assert "line_items must be a list of objects" in out["error"]
+    assert ctx.validation is None  # still gated: nothing was validated

@@ -433,6 +433,14 @@ def tool_validate_amounts(
 ) -> dict[str, Any]:
     """Real arithmetic, done in Python. This is the gate on `submit_extraction`."""
     line_items = line_items or []
+    # Models sometimes send line items as strings; say so rather than crash.
+    if not isinstance(line_items, list) or any(not isinstance(i, dict) for i in line_items):
+        return {
+            "error": (
+                "line_items must be a list of objects with description, quantity, "
+                "unit_price and amount - not strings. Call validate_amounts again."
+            )
+        }
     checks: list[ValidationCheck] = []
 
     def add(name: str, passed: bool, detail: str) -> None:

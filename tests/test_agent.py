@@ -177,3 +177,22 @@ def test_missing_api_key_fails_fast(settings):
     settings.openai_api_key = ""
     with pytest.raises(AgentError):
         ExtractionAgent(settings=settings)
+
+
+def test_provider_extras_on_tool_calls_are_echoed_back(invoice_doc, settings):
+    # Gemini signs each tool call and rejects the next request if the
+    # signature is not sent back with it.
+    signed = tool_call("a", "validate_amounts", VALID_VALIDATION_ARGS)
+    signed.extra_content = {"google": {"thought_signature": "sig-123"}}
+    client = FakeOpenAI([
+        turn(signed),
+        turn(tool_call("b", "submit_extraction", VALID_SUBMISSION)),
+    ])
+    ExtractionAgent(client=client, settings=settings).run(invoice_doc)
+
+    assistant = next(
+        m for m in client.completions.requests[1]["messages"] if m["role"] == "assistant"
+    )
+    assert assistant["tool_calls"][0]["extra_content"] == {
+        "google": {"thought_signature": "sig-123"}
+    }

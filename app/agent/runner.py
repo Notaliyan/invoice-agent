@@ -90,6 +90,24 @@ def _summarise(name: str, result: dict[str, Any]) -> str:
     return "ok"
 
 
+def _tool_call_for_history(tc: Any) -> dict[str, Any]:
+    """Echo a tool call back into the conversation.
+
+    Provider-specific extras must survive the round trip: Gemini attaches a
+    thought signature under ``extra_content`` and rejects the next request
+    with a 400 if it is missing.
+    """
+    call: dict[str, Any] = {
+        "id": tc.id,
+        "type": "function",
+        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+    }
+    extra = getattr(tc, "extra_content", None)
+    if extra:
+        call["extra_content"] = extra
+    return call
+
+
 def _message_for_trace(message: Any) -> dict[str, Any]:
     """The assistant turn as plain data, for the generation's output."""
     return {
@@ -126,7 +144,11 @@ class ExtractionAgent:
         else:
             if not self.settings.openai_api_key:
                 raise AgentError("OPENAI_API_KEY is not set.")
-            self.client = OpenAI(api_key=self.settings.openai_api_key)
+            self.client = OpenAI(
+                api_key=self.settings.openai_api_key,
+                base_url=self.settings.openai_base_url or None,
+                max_retries=self.settings.openai_max_retries,
+            )
 
     def run(self, doc: PdfDocument) -> AgentResult:
         """Run the agent on one document, as a single Langfuse trace."""
@@ -247,17 +269,7 @@ class ExtractionAgent:
                 {
                     "role": "assistant",
                     "content": message.content,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                        for tc in message.tool_calls
-                    ],
+                    "tool_calls": [_tool_call_for_history(tc) for tc in message.tool_calls],
                 }
             )
 

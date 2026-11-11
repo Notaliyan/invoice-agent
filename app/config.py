@@ -14,6 +14,12 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    # Empty means api.openai.com. Set it to run against any OpenAI-compatible
+    # endpoint (Gemini, Groq, a local server) with that provider's key and model.
+    openai_base_url: str = ""
+    # Retries on rate limits and transient errors, with exponential backoff.
+    # Raise it on free tiers with a low requests-per-minute cap.
+    openai_max_retries: int = 2
 
     # How many model round-trips the agent gets before we give up.
     agent_max_steps: int = 12

@@ -25,6 +25,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from openai import OpenAIError
+
 from app.agent.prompts import PROMPT_FINGERPRINT, PROMPT_VERSION
 from app.agent.runner import AgentError, ExtractionAgent
 from app.config import Settings, get_settings
@@ -51,6 +53,9 @@ class CaseResult:
     validation_passed: bool | None = None
     steps: int = 0
     trace_id: str | None = None
+    # True when the model provider failed (rate limit, outage, bad key) rather
+    # than the agent. Says nothing about extraction quality.
+    crashed: bool = False
 
 
 @dataclass
@@ -68,6 +73,10 @@ class EvalReport:
     @property
     def failed_cases(self) -> list[str]:
         return [c.case_id for c in self.cases if c.extraction is None]
+
+    @property
+    def crashed_cases(self) -> list[str]:
+        return [c.case_id for c in self.cases if c.crashed]
 
     def history_entry(self) -> dict[str, Any]:
         return {
@@ -109,9 +118,19 @@ class EvalReport:
 
 def run_case(agent: ExtractionAgent, case: GoldenCase) -> dict[str, Any]:
     """Run the agent on one golden document. Never raises for an agent failure:
-    a failed extraction is a result to be scored, not a crash."""
+    a failed extraction is a result to be scored, not a crash. A provider
+    failure is reported too, but flagged so the run is not mistaken for a
+    quality measurement."""
     try:
         result = agent.run(case.document())
+    except OpenAIError as exc:
+        return {
+            "extraction": None,
+            "error": f"provider error: {type(exc).__name__}: {str(exc)[:200]}",
+            "validation_passed": None,
+            "steps": 0,
+            "crashed": True,
+        }
     except AgentError as exc:
         return {
             "extraction": None,
@@ -136,6 +155,7 @@ def _case_result(case: GoldenCase, output: dict[str, Any], trace_id: str | None)
         validation_passed=output["validation_passed"],
         steps=output["steps"],
         trace_id=trace_id,
+        crashed=bool(output.get("crashed")),
     )
 
 
@@ -250,6 +270,7 @@ def _run_with_langfuse(
                 "error": "task crashed; see the Langfuse trace / logs",
                 "validation_passed": None,
                 "steps": 0,
+                "crashed": True,
             }
             results[case.id] = _case_result(case, output, None)
 
@@ -338,7 +359,9 @@ def run_eval(
         langfuse_url=url,
         previous=_previous_comparable(load_history(results_dir), len(cases)),
     )
-    if record:
+    # An incomplete run would become the baseline every later run is compared
+    # against, so it is never written to history.
+    if record and not report.crashed_cases:
         _record(report, results_dir)
     return report
 
@@ -370,6 +393,12 @@ def format_report(report: EvalReport, tolerance: float = DEFAULT_TOLERANCE) -> s
         lines.append(line)
     if report.failed_cases:
         lines.append(f"no extraction produced for: {', '.join(report.failed_cases)}")
+    if report.crashed_cases:
+        lines.append(
+            f"INCOMPLETE RUN, not recorded: the model provider failed on "
+            f"{len(report.crashed_cases)} of {len(report.cases)} documents "
+            "(rate limit, outage or bad key). The metrics above are not meaningful."
+        )
     if report.langfuse_url:
         lines.append(f"Langfuse: {report.langfuse_url}")
     regressions = report.regressions(tolerance)
@@ -422,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
         concurrency=args.concurrency,
     )
     print(format_report(report, args.tolerance))
+    if report.crashed_cases:
+        return 2
     return 1 if args.fail_on_regression and report.regressions(args.tolerance) else 0
 
 

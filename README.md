@@ -304,6 +304,8 @@ All via `.env` (see `.env.example`).
 |---|---|---|
 | `OPENAI_API_KEY` | — | Required at request time, not at import time. |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Cheap, and the validation loop covers for it. Bump to `gpt-4.1` or `gpt-4o` for messy multi-page documents. |
+| `OPENAI_BASE_URL` | empty | Empty means OpenAI. Set it to use any OpenAI-compatible provider (Gemini, Groq, a local server); `OPENAI_API_KEY` and `OPENAI_MODEL` are then that provider's key and model. |
+| `OPENAI_MAX_RETRIES` | `2` | Retries on rate limits and transient errors, with backoff. Use `10` on free tiers with a per-minute request cap. |
 | `AGENT_MAX_STEPS` | `12` | Model round-trips before giving up. |
 | `AGENT_TEMPERATURE` | `0.0` | Extraction should be deterministic. |
 | `MAX_UPLOAD_BYTES` | `10485760` | 10 MB. |

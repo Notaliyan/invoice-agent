@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from openai import OpenAIError
 
 from evals.dataset import GoldenCase, load_cases
 from evals.run_eval import format_report, load_history, main, run_eval
@@ -115,3 +116,38 @@ def test_cli_refuses_to_run_without_an_openai_key(monkeypatch, settings, capsys)
         main([])
     assert exc.value.code == 2
     assert "OPENAI_API_KEY" in capsys.readouterr().err
+
+
+class RateLimitedAfter(FakeOpenAI):
+    """Answers the scripted turns, then fails like a provider out of quota."""
+
+    def __init__(self, script):
+        super().__init__(script)
+        scripted = self.completions.create
+
+        def create(**kwargs):
+            if not self.completions.script:
+                raise OpenAIError("Error code: 429 - quota exceeded")
+            return scripted(**kwargs)
+
+        self.completions.create = create
+
+
+def test_provider_failure_marks_the_run_incomplete_and_unrecorded(cases, settings, tmp_path):
+    client = RateLimitedAfter(perfect_script(cases[0]))
+    report = run_eval(settings=settings, client=client, cases=cases, results_dir=tmp_path)
+
+    assert report.crashed_cases == [cases[1].id]
+    assert "provider error" in report.cases[1].error
+    # Half the documents never ran, so this must not become a baseline.
+    assert load_history(tmp_path) == []
+    assert list(tmp_path.iterdir()) == []
+    assert "INCOMPLETE RUN" in format_report(report)
+
+
+def test_agent_failure_is_not_a_provider_failure(cases, settings, tmp_path):
+    client = FakeOpenAI([prose("hmm")] * settings.agent_max_steps + perfect_script(cases[1]))
+    report = run_eval(settings=settings, client=client, cases=cases, results_dir=tmp_path)
+
+    assert report.crashed_cases == []
+    assert len(load_history(tmp_path)) == 1
