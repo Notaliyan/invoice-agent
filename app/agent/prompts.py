@@ -5,7 +5,7 @@ import hashlib
 # Bump this whenever you change any prompt below. It is stamped on every
 # Langfuse trace and names each eval run, which is what makes "did that prompt
 # change help?" answerable.
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 SYSTEM_PROMPT = """\
 You are a document extraction agent. You are given a business document (invoice,
@@ -47,6 +47,16 @@ Rules:
 - `tax_rate` is a percentage: 19.0 means 19%.
 - Use null for anything the document genuinely does not state. A missing field is
   correct; a guessed field is a bug.
+- Report what is printed, not what you can work out. In particular:
+  - `customer` is null unless the document names who is being billed. A job or
+    delivery address is not a customer name, and neither is a placeholder such
+    as "walk-in customer" that the document does not print.
+  - `subtotal` is null when there is no subtotal line, even if the line items
+    add up to one.
+  - `due_date` needs a printed date. "Payment on receipt" or "due immediately"
+    is not a date; leave it null.
+  - `invoice_number` is null when no number is printed. Never send the text
+    "null" or "N/A" as a value.
 - `confidence` is your honest estimate that the whole record is correct. Lower it
   when validation checks failed, when the document was hard to read, or when you
   had to assume a date format or currency.

@@ -23,16 +23,19 @@ pytestmark = pytest.mark.skipif(
     reason="live eval: set OPENAI_API_KEY to run",
 )
 
-# Starting floors, not measured ones: tighten them to just under your first
-# real run so the gate catches regressions instead of merely catastrophes.
+# Set just under the measured runs in evals/results/history.jsonl (prompt v2 on
+# gemini-3.5-flash-lite: accuracy 0.994, completeness 1.000, hallucination
+# 0.012). Those are single runs, so the margins allow for run-to-run noise;
+# re-measure before tightening, and after switching model.
 AGGREGATE_FLOORS = {
-    "field_accuracy": 0.85,
-    "extraction_completeness": 0.90,
+    "field_accuracy": 0.95,
+    "extraction_completeness": 0.95,
 }
-MAX_HALLUCINATION_RATE = 0.05
+MAX_HALLUCINATION_RATE = 0.03
 
-# No single document may fall apart, even if the average looks fine.
-PER_CASE_MIN_ACCURACY = 0.60
+# No single document may fall apart, even if the average looks fine. The worst
+# measured case scores 0.93 accuracy and 0.14 hallucination.
+PER_CASE_MIN_ACCURACY = 0.85
 PER_CASE_MAX_HALLUCINATION = 0.20
 
 CASE_IDS = [case.id for case in load_cases()]
