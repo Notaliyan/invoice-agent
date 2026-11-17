@@ -15,6 +15,11 @@ venv/
 # Data
 uploads/
 data/
+
+# Documents dropped into the n8n inbox
+n8n/files/**
+!n8n/files/inbox/
+!n8n/files/inbox/.gitkeep
 *.db
 *.sqlite3
 

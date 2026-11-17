@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -51,7 +52,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Document Intelligence Agent",
-    version="0.3.0",
+    version="0.4.0",
     description=(
         "Upload a document; a tool-calling agent reads it, validates the "
         "arithmetic, and returns structured JSON."
@@ -218,6 +219,29 @@ def analytics_one(
     with _analytics_session() as session:
         rows = analytics.run_query(session, name, limit=limit)
         return {"name": name, **_query_payload(name, rows)}
+
+
+# A stand-in for Slack. The n8n workflow announces each result by POSTing
+# {"text": "..."} to NOTIFY_WEBHOOK_URL; pointed here, the whole stack can be
+# demonstrated without an outside account. Held in memory, newest first, and
+# gone on restart: this is a demo inbox, not a message store.
+_notifications: deque[dict[str, Any]] = deque(maxlen=50)
+
+
+@app.post("/notifications", status_code=202)
+def receive_notification(payload: dict[str, Any]) -> dict[str, Any]:
+    """Accept a notification, in the shape a Slack incoming webhook takes."""
+    _notifications.appendleft(
+        {"received_at": datetime.now(UTC).isoformat(timespec="seconds"), "payload": payload}
+    )
+    logger.info("notification: %s", payload.get("text", payload))
+    return {"received": True, "held": len(_notifications)}
+
+
+@app.get("/notifications")
+def list_notifications() -> dict[str, Any]:
+    """The most recent notifications, newest first."""
+    return {"notifications": list(_notifications)}
 
 
 @app.exception_handler(AgentError)

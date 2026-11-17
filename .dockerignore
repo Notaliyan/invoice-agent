@@ -1,0 +1,17 @@
+# Keep secrets, local state and everything the API does not need out of the image.
+.env
+.env.*
+.git
+.venv
+venv
+data
+reports
+n8n
+evals
+tests
+samples
+docs
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache

@@ -344,6 +344,162 @@ python -m evals.run_eval --concurrency 1    # a fresh run, stored with timing
 
 ---
 
+## Workflow automation (n8n)
+
+An [n8n](https://n8n.io) workflow puts the agent behind two automatic triggers
+and routes what comes back. n8n runs self-hosted, as a second service in
+`docker-compose.yml` next to the API.
+
+```mermaid
+flowchart LR
+    W[Webhook<br/>POST /webhook/invoice] --> X
+    F[New file in<br/>n8n/files/inbox] --> R[Read file] --> X
+    X[InvoiceAgent API<br/>POST /process] --> S[Summarise result]
+    X -. stores the run .-> DB[(SQL)]
+    S --> Q{Needs review?}
+    Q -- failed or does not add up --> N1[Notify: needs review]
+    Q -- clean --> N2[Notify: processed]
+    N1 --> Z[Return result]
+    N2 --> Z
+```
+
+| Step | Node | What it does |
+|---|---|---|
+| Trigger | Webhook | Accepts a document as a multipart upload in a field named `file` |
+| Trigger | Local File Trigger + Read/Write Files | Fires when a file appears in `n8n/files/inbox` and loads it |
+| Call the agent | HTTP Request | Posts the document to `/process`. A 422 from the agent is kept as data, not treated as a crash |
+| Store | (the API) | `/process` writes the run, invoice and line items to SQL and returns a `run_id` |
+| Process the result | Edit Fields | Reduces the response to vendor, number, amount, and whether it needs review |
+| Route | If | Sends failed or non-validating documents down a different branch |
+| Notify | HTTP Request | Posts `{"text": "..."}` to `NOTIFY_WEBHOOK_URL` |
+
+The workflow is in [`n8n/workflows/invoice-intake.json`](n8n/workflows/invoice-intake.json).
+
+![The Invoice intake workflow in the n8n editor](docs/screenshots/workflow.png)
+
+*The workflow in the n8n editor: two triggers on the left, the agent call, then
+the split into "needs review" and "processed".*
+
+### Running it
+
+Needs [Docker Desktop](https://www.docker.com/products/docker-desktop/) and a
+filled-in `.env`.
+
+```bash
+docker compose up -d --build
+```
+
+Load the workflow and publish it. Both are command-line steps, so the workflow
+runs before anyone has opened the n8n editor:
+
+```bash
+docker compose exec -u node n8n n8n import:workflow --input=/workflows/invoice-intake.json
+```
+
+```bash
+docker compose exec -u node n8n n8n publish:workflow --id=invoiceIntake001
+```
+
+n8n picks the published workflow up within about 15 seconds. To look at it in
+the editor, open <http://localhost:5678> and create the local owner account
+n8n asks for on first visit.
+
+### What a run looks like
+
+Trigger it by webhook. The call returns when the workflow has finished, with
+the summary the workflow built:
+
+```bash
+curl -s -F "file=@samples/clean_invoice_eur.pdf" http://localhost:5678/webhook/invoice
+```
+
+```json
+{"extracted":true,"needs_review":false,"filename":"clean_invoice_eur.pdf",
+ "vendor":"Nordlicht Systeme GmbH","invoice_number":"NLS-2024-0417",
+ "amount":"4967.06 EUR","run_id":"40","document_id":"f26bfee0...","problem":""}
+```
+
+Or drop a file into the watched folder. This sample has a total that does not
+match its subtotal and tax:
+
+```bash
+cp samples/broken_invoice.pdf n8n/files/inbox/
+```
+
+A file the agent cannot read takes the same review branch:
+
+```bash
+curl -s -F "file=@README.md" http://localhost:5678/webhook/invoice
+```
+
+Then read what was announced:
+
+```bash
+curl -s http://localhost:8000/notifications
+```
+
+Those three runs produced these notifications, one per route:
+
+```text
+Processed: invoice NLS-2024-0417 from Nordlicht Systeme GmbH, 4967.06 EUR. Stored as run 40.
+Needs review: broken_invoice.pdf from Halden Werkzeug GmbH, 1398.63 EUR. The numbers on the document do not add up.
+Needs review: document. Extraction failed (HTTP 422): File does not look like a PDF (missing %PDF header).
+```
+
+In n8n's Executions view, the green path shows the route each document took.
+
+A clean invoice sent to the webhook, announced as processed (42 seconds, nearly
+all of it the model):
+
+![Execution of a clean invoice, routed to Notify: processed](docs/screenshots/execution-processed.png)
+
+An invoice whose total does not add up, dropped into the inbox folder and
+flagged for review:
+
+![Execution of a broken invoice from the folder trigger, routed to Notify: needs review](docs/screenshots/execution-needs-review.png)
+
+The stored runs show up in the analytics like any other:
+
+```bash
+curl -s http://localhost:8000/analytics/processing_performance
+```
+
+### Notifications
+
+The workflow announces every result by posting `{"text": "..."}` to
+`NOTIFY_WEBHOOK_URL`. That is the body a Slack incoming webhook accepts, so
+setting the variable in `.env` to a Slack webhook URL sends the messages to a
+channel.
+
+Left unset, it points at the API's own `GET/POST /notifications`: an
+in-memory inbox holding the last 50 messages, there so the whole chain can be
+shown working without an outside account. It is a demo aid, not a message store.
+
+### Choices made in the compose file
+
+- **Pinned n8n version.** A workflow file records the version of every node it
+  uses; an unpinned image can change them underneath it.
+- **The folder trigger is re-enabled.** n8n 2.0 switches off Local File Trigger
+  and Execute Command by default. `NODES_EXCLUDE` turns only the first back on,
+  and `N8N_RESTRICT_FILE_ACCESS_TO` limits file nodes to the mounted `/files`.
+- **Polling for the folder watch.** File-change events do not cross from a
+  Windows host into a Linux container, so the trigger polls.
+- **One database.** The API container mounts `./data`, the same SQLite file
+  local runs use.
+
+### Limits
+
+- Run on Docker Desktop for Windows with n8n 2.47.7 only.
+- The webhook has no authentication. That is acceptable on localhost and not
+  anywhere else; n8n's Webhook node supports header and basic auth.
+- A file stays in the inbox after it is processed. Restarting n8n does not
+  process it again, and the API recognises a repeated document, but nothing
+  moves or deletes it.
+- The webhook caller waits for the whole extraction, 10 to 60 seconds on a
+  free-tier model.
+
+---
+
 ## API
 
 ### `POST /process`
@@ -413,6 +569,11 @@ Liveness plus whether an API key, tracing and storage are configured.
 SQL analytics over everything stored. See
 [Storage and analytics](#storage-and-analytics).
 
+### `POST /notifications`, `GET /notifications`
+
+A demo inbox for the n8n workflow's notifications. See
+[Notifications](#notifications).
+
 ### Errors
 
 | Status | When |
@@ -474,8 +635,13 @@ evals/
   run_eval.py         runs the dataset, records to Langfuse + history.jsonl
   store.py            eval runs -> database, with their scores
   test_golden_eval.py the same run as a pytest quality gate (live)
-tests/                207 tests, all offline (the model and Langfuse are faked)
+tests/                218 tests, all offline (the model and Langfuse are faked)
 samples/              PDF generator: two clean invoices, one with broken math
+n8n/
+  workflows/          invoice-intake.json, the n8n workflow
+  files/inbox/        drop a PDF here and the workflow picks it up
+Dockerfile            the API as a container
+docker-compose.yml    the API and n8n together
 ```
 
 ## Testing approach
@@ -508,6 +674,6 @@ The API tests never touch the real database.
 - [x] **Phase 1** — Core agent: PDF upload, tool-calling, validated structured output
 - [x] **Phase 2** — Langfuse tracing, golden dataset and eval pipeline
 - [x] **Phase 3** — SQL storage, analytics queries, `/analytics` endpoint, pandas report
-- [ ] **Phase 4** — n8n webhook trigger
+- [x] **Phase 4** — n8n workflow: webhook or new file → agent → route → notify
 - [ ] **Phase 5** — Dashboard
 - [ ] **Phase 6** — Docker Compose + GitHub Actions CI

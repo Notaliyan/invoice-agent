@@ -1,0 +1,289 @@
+{
+  "id": "invoiceIntake001",
+  "name": "Invoice intake",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e01",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-60, -220],
+      "parameters": {
+        "width": 620,
+        "height": 180,
+        "content": "## Invoice intake\nA document arrives by webhook or by landing in `/files/inbox`. It is sent to the InvoiceAgent API, which extracts it, checks the arithmetic and stores the run in SQL. The result is then routed: clean extractions are announced, anything that failed or did not validate is flagged for review.\n\nSettings come from the n8n container's environment: `AGENT_URL`, `NOTIFY_WEBHOOK_URL`."
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e02",
+      "name": "Webhook: document uploaded",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "5b0c7e1e-6a53-4d0b-9a35-invoiceintake",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice",
+        "responseMode": "lastNode",
+        "responseData": "firstEntryJson",
+        "options": {}
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e03",
+      "name": "Folder: new file in inbox",
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [0, 220],
+      "parameters": {
+        "triggerOn": "folder",
+        "path": "/files/inbox",
+        "events": ["add"],
+        "options": {
+          "awaitWriteFinish": true,
+          "usePolling": true
+        }
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e04",
+      "name": "Read file from inbox",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [220, 220],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{ $json.path }}",
+        "options": {
+          "dataPropertyName": "file"
+        }
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e05",
+      "name": "Extract with InvoiceAgent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AGENT_URL }}/process",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e06",
+      "name": "Summarise result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [680, 100],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a0000000-0000-4000-8000-000000000001",
+              "name": "extracted",
+              "type": "boolean",
+              "value": "={{ $json.statusCode === 200 }}"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000002",
+              "name": "needs_review",
+              "type": "boolean",
+              "value": "={{ $json.statusCode !== 200 || $json.body.validation.passed !== true }}"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000003",
+              "name": "filename",
+              "type": "string",
+              "value": "={{ $json.body?.filename || 'document' }}"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000004",
+              "name": "vendor",
+              "type": "string",
+              "value": "={{ $json.body?.extraction?.vendor?.name || '' }}"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000005",
+              "name": "invoice_number",
+              "type": "string",
+              "value": "={{ $json.body?.extraction?.invoice_number || '' }}"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000006",
+              "name": "amount",
+              "type": "string",
+              "value": "={{ $json.statusCode === 200 ? $json.body.extraction.total + ' ' + $json.body.extraction.currency : '' }}"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000007",
+              "name": "run_id",
+              "type": "string",
+              "value": "={{ $json.statusCode === 200 && $json.body.run_id != null ? String($json.body.run_id) : '' }}"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000008",
+              "name": "document_id",
+              "type": "string",
+              "value": "={{ $json.body?.document_id || '' }}"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000009",
+              "name": "problem",
+              "type": "string",
+              "value": "={{ $json.statusCode !== 200 ? 'Extraction failed (HTTP ' + $json.statusCode + '): ' + ($json.body?.detail || 'no detail') : ($json.body.validation.passed !== true ? 'The numbers on the document do not add up' : '') }}"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e07",
+      "name": "Needs review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [900, 100],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c0000000-0000-4000-8000-000000000001",
+              "leftValue": "={{ $json.needs_review }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e08",
+      "name": "Notify: needs review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 0],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NOTIFY_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: 'Needs review: ' + $json.filename + ($json.vendor ? ' from ' + $json.vendor : '') + ($json.amount ? ', ' + $json.amount : '') + '. ' + $json.problem.replace(/\\.$/, '') + '.' }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e09",
+      "name": "Notify: processed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 200],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NOTIFY_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: 'Processed: invoice ' + ($json.invoice_number || '(no number)') + ' from ' + $json.vendor + ', ' + $json.amount + '. Stored as run ' + $json.run_id + '.' }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "8d1f6a52-3c1b-4a55-9f0e-1a2b3c4d5e10",
+      "name": "Return result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1380, 100],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ $('Summarise result').item.json }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook: document uploaded": {
+      "main": [[{ "node": "Extract with InvoiceAgent", "type": "main", "index": 0 }]]
+    },
+    "Folder: new file in inbox": {
+      "main": [[{ "node": "Read file from inbox", "type": "main", "index": 0 }]]
+    },
+    "Read file from inbox": {
+      "main": [[{ "node": "Extract with InvoiceAgent", "type": "main", "index": 0 }]]
+    },
+    "Extract with InvoiceAgent": {
+      "main": [[{ "node": "Summarise result", "type": "main", "index": 0 }]]
+    },
+    "Summarise result": {
+      "main": [[{ "node": "Needs review?", "type": "main", "index": 0 }]]
+    },
+    "Needs review?": {
+      "main": [
+        [{ "node": "Notify: needs review", "type": "main", "index": 0 }],
+        [{ "node": "Notify: processed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notify: needs review": {
+      "main": [[{ "node": "Return result", "type": "main", "index": 0 }]]
+    },
+    "Notify: processed": {
+      "main": [[{ "node": "Return result", "type": "main", "index": 0 }]]
+    }
+  }
+}
