@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+/*
+ * One dark theme, the same slate look as ModulSearch.
+ *
+ * Chart colours are roles, not raw hex in components: the series colour is
+ * slot 1 (blue) of a colour-blind-checked categorical palette, stepped for a
+ * dark surface. Every chart here plots a single series, so one hue is all the
+ * data needs; status colours are reserved for pass / review / fail and always
+ * appear with an icon and a word.
+ */
+:root {
+  color-scheme: dark;
+
+  --page: #020617; /* slate-950 */
+  --surface: #0f172a; /* slate-900: cards and chart surfaces */
+  --surface-raised: #1e293b; /* slate-800 */
+  --hairline: #1e293b;
+  --axis: #334155;
+
+  --ink: #f1f5f9;
+  --ink-secondary: #cbd5e1;
+  --ink-muted: #94a3b8;
+
+  --series-1: #3987e5;
+  --series-1-wash: rgba(57, 135, 229, 0.1);
+  --de-emphasis: #475569;
+
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-critical: #e66767;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-raised: var(--surface-raised);
+  --color-hairline: var(--hairline);
+  --color-axis: var(--axis);
+  --color-ink: var(--ink);
+  --color-ink-secondary: var(--ink-secondary);
+  --color-ink-muted: var(--ink-muted);
+  --color-series: var(--series-1);
+  --color-good: var(--status-good);
+  --color-warning: var(--status-warning);
+  --color-critical: var(--status-critical);
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Segoe UI Mono", Consolas, monospace;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+/* Keyboard focus is always visible, on marks as well as controls. */
+:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise {
+  animation: rise 0.25s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .animate-spin,
+  .animate-pulse {
+    animation: none;
+  }
+}

@@ -1,10 +1,11 @@
-# The whole stack: the agent API, its Postgres database, and n8n.
+# The whole stack: the agent API, its Postgres database, the dashboard, and n8n.
 #
 #   docker compose up -d --build
 #
-#   api   http://localhost:8000      (other services reach it as http://api:8000)
-#   db    localhost:5432             (Postgres; user and database below)
-#   n8n   http://localhost:5678
+#   dashboard  http://localhost:3000
+#   api        http://localhost:8000   (other services reach it as http://api:8000)
+#   db         localhost:5432          (Postgres; user and database below)
+#   n8n        http://localhost:5678
 #
 # CI starts only `db` and `api`. See "Continuous integration" and "Workflow
 # automation (n8n)" in the README.
@@ -45,6 +46,19 @@ services:
       - "8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        # The API as the *browser* reaches it, compiled into the bundle.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
         condition: service_healthy
     restart: unless-stopped
 

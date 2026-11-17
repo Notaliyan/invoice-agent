@@ -4,8 +4,10 @@
 
 Upload a business document (invoice, receipt, purchase order). A tool-calling
 agent reads it, checks its own arithmetic in Python, and returns validated
-structured JSON. Every run is stored in a SQL database, and `/analytics`
-answers questions about the stored data.
+structured JSON. Every run is stored in a SQL database, `/analytics` answers
+questions about the stored data, and a Next.js dashboard shows both.
+
+![The dashboard's upload page after extracting an invoice](docs/screenshots/dashboard-upload.png)
 
 The point of this project is the *architecture*, not the extraction quality.
 This is **agent → tool-calling → validated structured output**, which is a
@@ -353,6 +355,86 @@ python -m evals.run_eval --concurrency 1    # a fresh run, stored with timing
 
 ---
 
+## Dashboard
+
+A Next.js dashboard in [`dashboard/`](dashboard/), on the same stack as
+ModulSearch: Next.js 16, React 19, TypeScript and Tailwind 4. It talks to the
+API from the browser and has two pages.
+
+```bash
+docker compose up -d --build        # then open http://localhost:3000
+```
+
+### Upload
+
+Drop a PDF on the page. The agent's steps appear one by one as they happen,
+then the extracted fields: parties, dates, amounts, line items, and each
+arithmetic check with its numbers.
+
+The live steps come from `POST /process/stream`, which sends Server-Sent
+Events while the agent works. The browser reads the stream with `fetch`, since
+`EventSource` cannot upload a file. The fields themselves arrive together at
+the end, because the agent submits them in one validated call; what is live is
+the trail of tool calls leading up to it.
+
+A document whose numbers do not add up is still extracted, and flagged:
+
+![An invoice whose total does not match, flagged for review](docs/screenshots/dashboard-needs-review.png)
+
+### Analytics
+
+Charts over `GET /analytics`, so every figure on the page is the result of one
+of the SQL queries above.
+
+![The analytics page](docs/screenshots/dashboard-analytics.png)
+
+| Chart | Form | Why |
+|---|---|---|
+| Headline numbers | Stat tiles | A single value is a number, not a one-bar chart |
+| Processing volume | Columns per day | Counts over time, from a zero baseline |
+| Extraction accuracy, hallucination rate | Two line charts | Two measures on different scales get a chart each, never two y-axes on one |
+| Spend by vendor | Ranked horizontal bars | Comparing parts: bars on one baseline read more exactly than slices |
+| Invoice value by month | Columns, with empty months kept | A month with no invoices is a gap, not a skipped label |
+| Needs review | Table | Rows to act on, not a shape |
+
+Choices worth knowing about:
+
+- **One currency at a time.** A selector above the spend charts scopes both;
+  amounts in different currencies are never added.
+- **The accuracy axis does not start at zero**, and the chart says so. From
+  zero, 97.8% and 99.4% would be the same line.
+- **One colour.** Every chart plots a single series, so they share one blue,
+  checked for contrast against the card background. Amber and green are kept
+  for status, and always come with an icon and a word.
+- **Nothing is hover-only.** Each chart has a "View as table" twin, every mark
+  can be reached with the keyboard, and the readout on hover repeats what the
+  table holds.
+- The charts are plain SVG and HTML, with no chart library.
+
+### Working on it
+
+With Node 22 installed:
+
+```bash
+cd dashboard && npm install && npm run dev
+```
+
+`NEXT_PUBLIC_API_URL` is the API's address as the browser sees it (default
+`http://localhost:8000`). It is compiled into the bundle, so in Docker it is a
+build argument. The API only accepts browser calls from the origins in
+`CORS_ORIGINS`.
+
+### Limits
+
+- No tests of its own beyond lint, type-check and build in CI. It was checked
+  by driving it in a headless browser: an upload on each page state, hover and
+  keyboard readouts, and a phone-width layout.
+- No login. Anyone who can open the page can upload documents and read the
+  analytics.
+- Dark theme only.
+
+---
+
 ## Workflow automation (n8n)
 
 An [n8n](https://n8n.io) workflow puts the agent behind two automatic triggers
@@ -513,11 +595,12 @@ shown working without an outside account. It is a demo aid, not a message store.
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and
-pull request, in two jobs.
+pull request, in three jobs.
 
 | Job | What it does |
 |---|---|
 | **Lint and tests** | `ruff`, then the offline test suite twice: on SQLite, and on a Postgres 16 service container |
+| **Dashboard lint and build** | ESLint, the TypeScript check and a production build of the Next.js dashboard |
 | **Docker build and golden eval** | Builds the image, starts it with Postgres through `docker compose`, smoke-tests `/health`, `/analytics` and `/notifications`, then runs the agent on the 12 golden documents inside that image |
 
 The eval step is the quality gate:
@@ -623,6 +706,20 @@ change them, add repository variables `OPENAI_MODEL`, `OPENAI_BASE_URL` and
 `{"text": "...", "filename": "pasted.txt"}` — same pipeline, no PDF needed.
 Useful for testing and for documents you have already extracted.
 
+### `POST /process/stream`
+
+The same upload as `/process`, answered as Server-Sent Events so a UI can show
+progress:
+
+| Event | Data |
+|---|---|
+| `started` | `{filename, pages, chars}`: the PDF was read |
+| `progress` | `{type: "step", step, max_steps}` before each model call; `{type: "tool", step, tool, ok, summary, duration_ms}` after each tool call |
+| `result` | The body `/process` returns |
+| `error` | `{error, detail}`, and the partial `trace` when the agent gave up |
+
+A bad upload is refused with a normal HTTP error before the stream starts.
+
 ### `GET /health`
 
 Liveness plus whether an API key, tracing and storage are configured.
@@ -664,6 +761,8 @@ All via `.env` (see `.env.example`).
 | `MAX_UPLOAD_BYTES` | `10485760` | 10 MB. |
 | `MAX_PDF_PAGES` | `25` | |
 | `PAGE_PREVIEW_CHARS` | `2500` | How much of page 1 the model sees before it must use tools. |
+| `CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Browser origins allowed to call the API: where the dashboard is served. |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | `docker compose` only: the API's address as the browser sees it, compiled into the dashboard. |
 | `DATABASE_URL` | `sqlite:///./data/invoice_agent.db` | Where runs are stored. For Postgres: `postgresql+psycopg://user:pass@host/db`. Empty turns storage and `/analytics` off. `docker compose` sets it to the `db` service. |
 | `POSTGRES_PASSWORD` | `invoice_dev` | `docker compose` only: password for the `db` service. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Both needed to turn tracing on. |
@@ -700,14 +799,18 @@ evals/
   store.py            eval runs -> database, with their scores
   thresholds.py       the quality bar, shared by CI and `pytest evals`
   test_golden_eval.py the same run as a pytest quality gate (live)
-tests/                225 tests, all offline (the model and Langfuse are faked)
+tests/                232 tests, all offline (the model and Langfuse are faked)
 samples/              PDF generator: two clean invoices, one with broken math
 n8n/
   workflows/          invoice-intake.json, the n8n workflow
   files/inbox/        drop a PDF here and the workflow picks it up
+dashboard/            Next.js dashboard: upload page and analytics page
+  src/app/            the two pages
+  src/components/     upload panel, live timeline, charts
+  src/hooks/          useProcessStream: reads the SSE stream
 Dockerfile            the API (and the eval runner) as a container
-docker-compose.yml    api + db (Postgres) + n8n
-.github/workflows/    ci.yml: lint, tests on SQLite and Postgres, Docker build, golden eval
+docker-compose.yml    api + db (Postgres) + dashboard + n8n
+.github/workflows/    ci.yml: lint, tests on SQLite and Postgres, dashboard build, Docker build, golden eval
 ```
 
 ## Testing approach
@@ -743,4 +846,4 @@ The API tests never touch the real database.
 - [x] **Phase 3** — SQL storage, analytics queries, `/analytics` endpoint, pandas report
 - [x] **Phase 4** — n8n workflow: webhook or new file → agent → route → notify
 - [x] **Phase 5** — Postgres in Docker Compose, GitHub Actions CI with the golden eval as a quality gate
-- [ ] **Phase 6** — Dashboard
+- [x] **Phase 6** — Next.js dashboard: live upload page and analytics charts

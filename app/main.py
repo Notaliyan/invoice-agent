@@ -9,18 +9,21 @@ same agent and return the same shape, and both store the run in the database.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app import analytics, db
@@ -52,12 +55,20 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Document Intelligence Agent",
-    version="0.4.0",
+    version="0.5.0",
     description=(
         "Upload a document; a tool-calling agent reads it, validates the "
         "arithmetic, and returns structured JSON."
     ),
     lifespan=lifespan,
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
 )
 
 
@@ -122,10 +133,14 @@ def _store_failure(doc: PdfDocument, exc: AgentError, duration_ms: int) -> None:
         logger.exception("could not store the failed run for %s", doc.filename)
 
 
-def _run(doc: PdfDocument, started: float) -> ProcessResponse:
+def _run(
+    doc: PdfDocument,
+    started: float,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> ProcessResponse:
     agent = ExtractionAgent(settings=settings)
     try:
-        result = agent.run(doc)
+        result = agent.run(doc, on_event=on_event) if on_event else agent.run(doc)
     except AgentError as exc:
         _store_failure(doc, exc, _elapsed_ms(started))
         raise
@@ -144,9 +159,8 @@ def _run(doc: PdfDocument, started: float) -> ProcessResponse:
     )
 
 
-@app.post("/process", response_model=ProcessResponse)
-async def process(file: UploadFile = File(...)) -> ProcessResponse:
-    started = time.perf_counter()
+async def _read_pdf(file: UploadFile) -> PdfDocument:
+    """Validate an upload and extract its text. Raises HTTPException."""
     data = await file.read()
 
     if not data:
@@ -166,7 +180,76 @@ async def process(file: UploadFile = File(...)) -> ProcessResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     logger.info("processing %s: %s pages, %s chars", filename, doc.page_count, doc.char_count)
+    return doc
+
+
+@app.post("/process", response_model=ProcessResponse)
+async def process(file: UploadFile = File(...)) -> ProcessResponse:
+    started = time.perf_counter()
+    doc = await _read_pdf(file)
     return await run_in_threadpool(_run, doc, started)
+
+
+def _sse(event: str, data: Any) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+async def _event_stream(doc: PdfDocument, started: float) -> AsyncIterator[str]:
+    """Run the agent on a worker thread and relay what it does as it does it."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+    def send(event: str, data: Any) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, (event, data))
+
+    def work() -> None:
+        try:
+            response = _run(doc, started, on_event=lambda e: send("progress", e))
+            send("result", response.model_dump(mode="json"))
+        except AgentError as exc:
+            send(
+                "error",
+                {
+                    "error": "extraction_failed",
+                    "detail": str(exc),
+                    "trace": exc.trace.model_dump() if exc.trace else None,
+                },
+            )
+        except Exception as exc:
+            logger.exception("streamed run failed for %s", doc.filename)
+            send("error", {"error": "internal_error", "detail": f"{type(exc).__name__}: {exc}"})
+        finally:
+            send("end", None)
+
+    yield _sse(
+        "started",
+        {"filename": doc.filename, "pages": doc.page_count, "chars": doc.char_count},
+    )
+    task = loop.run_in_executor(None, work)
+    while True:
+        event, data = await queue.get()
+        if event == "end":
+            break
+        yield _sse(event, data)
+    await task
+
+
+@app.post("/process/stream")
+async def process_stream(file: UploadFile = File(...)) -> StreamingResponse:
+    """`/process` as Server-Sent Events, for a UI that shows progress.
+
+    Events: `started` (the document was read), `progress` (a model step began,
+    or a tool call finished), then either `result` (the same body `/process`
+    returns) or `error`. A bad upload is rejected with a normal HTTP error
+    before the stream starts."""
+    started = time.perf_counter()
+    doc = await _read_pdf(file)
+    return StreamingResponse(
+        _event_stream(doc, started),
+        media_type="text/event-stream",
+        # Tell proxies not to hold events back.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/process/text", response_model=ProcessResponse)

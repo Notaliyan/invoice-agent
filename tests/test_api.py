@@ -179,3 +179,121 @@ def test_processing_works_with_storage_off(client, stub_agent, monkeypatch):
     body = client.post("/process/text", json={"text": "RECHNUNG ..."}).json()
     assert body["run_id"] is None
     assert client.get("/health").json()["storage"] is False
+
+
+# ---------------------------------------------------------------------------
+# streaming and the dashboard
+# ---------------------------------------------------------------------------
+
+
+def _pdf_bytes(text: str = "RECHNUNG 4967.06 EUR") -> bytes:
+    import io
+
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer)
+    page.drawString(72, 720, text)
+    page.save()
+    return buffer.getvalue()
+
+
+def _events(body: str) -> list[tuple[str, dict]]:
+    """Parse a Server-Sent Events body into (event, data) pairs."""
+    import json
+
+    out = []
+    for block in body.replace("\r\n", "\n").strip().split("\n\n"):
+        fields = dict(line.split(": ", 1) for line in block.split("\n"))
+        out.append((fields["event"], json.loads(fields["data"])))
+    return out
+
+
+@pytest.fixture
+def streaming_agent(monkeypatch):
+    """A stub agent that reports progress the way the real one does."""
+
+    def install(behaviour):
+        class Stub:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, doc, on_event=None):
+                return behaviour(doc, on_event)
+
+        monkeypatch.setattr(main, "ExtractionAgent", Stub)
+
+    return install
+
+
+def test_stream_relays_progress_then_the_result(client, streaming_agent):
+    def behaviour(doc, on_event):
+        on_event({"type": "step", "step": 1, "max_steps": 12})
+        on_event({"type": "tool", "step": 1, "tool": "validate_amounts", "ok": True,
+                  "summary": "all checks passed", "duration_ms": 3})
+        return _stub_result()
+
+    streaming_agent(behaviour)
+    response = client.post(
+        "/process/stream", files={"file": ("invoice.pdf", _pdf_bytes(), "application/pdf")}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+
+    events = _events(response.text)
+    assert [name for name, _ in events] == ["started", "progress", "progress", "result"]
+    assert events[0][1] == {"filename": "invoice.pdf", "pages": 1, "chars": events[0][1]["chars"]}
+    assert events[2][1]["tool"] == "validate_amounts"
+
+    result = events[3][1]
+    assert result["extraction"]["total"] == 4967.06
+    assert isinstance(result["run_id"], int)  # stored, like /process
+
+
+def test_stream_reports_an_agent_failure_as_an_event(client, streaming_agent):
+    def behaviour(doc, on_event):
+        on_event({"type": "step", "step": 1, "max_steps": 6})
+        raise AgentError(
+            "Agent did not produce a validated extraction within 6 steps.",
+            trace=AgentTrace(model="fake-model", steps=6, stop_reason="step_budget_exhausted"),
+        )
+
+    streaming_agent(behaviour)
+    response = client.post(
+        "/process/stream", files={"file": ("invoice.pdf", _pdf_bytes(), "application/pdf")}
+    )
+
+    events = _events(response.text)
+    assert [name for name, _ in events] == ["started", "progress", "error"]
+    assert events[2][1]["error"] == "extraction_failed"
+    assert events[2][1]["trace"]["stop_reason"] == "step_budget_exhausted"
+    assert _counts()["processing_runs"] == 1  # the failure is stored too
+
+
+def test_stream_reports_an_unexpected_crash_instead_of_hanging(client, streaming_agent):
+    def behaviour(doc, on_event):
+        raise RuntimeError("provider exploded")
+
+    streaming_agent(behaviour)
+    response = client.post(
+        "/process/stream", files={"file": ("invoice.pdf", _pdf_bytes(), "application/pdf")}
+    )
+    events = _events(response.text)
+    assert events[-1][0] == "error"
+    assert events[-1][1] == {"error": "internal_error", "detail": "RuntimeError: provider exploded"}
+
+
+def test_stream_rejects_a_bad_upload_before_streaming(client):
+    response = client.post(
+        "/process/stream", files={"file": ("notes.txt", b"just some text", "text/plain")}
+    )
+    assert response.status_code == 422
+    assert "%PDF" in response.json()["detail"]
+
+
+def test_the_dashboard_origin_may_call_the_api(client):
+    allowed = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+    other = client.get("/health", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in other.headers

@@ -2,7 +2,8 @@ name: CI
 
 # Every push and pull request:
 #   1. test  - lint, then the offline test suite on SQLite and again on Postgres
-#   2. eval  - build the Docker image, start it with Postgres, smoke-test the
+#   2. dashboard - lint, type-check and build the Next.js dashboard
+#   3. eval  - build the Docker image, start it with Postgres, smoke-test the
 #              endpoints, then run the agent on the golden dataset inside that
 #              image and fail if quality misses the bar or regresses
 #
@@ -67,6 +68,35 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+psycopg://invoice:invoice_ci@localhost:5432/invoice_agent_test
         run: pytest
+
+  dashboard:
+    name: Dashboard lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
 
   eval:
     name: Docker build and golden eval

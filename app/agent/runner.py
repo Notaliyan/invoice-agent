@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from openai import OpenAI
@@ -30,6 +31,20 @@ from app.pdf import PdfDocument
 from app.schemas import AgentTrace, ExtractionResult, ToolCallRecord, ValidationReport
 
 logger = logging.getLogger(__name__)
+
+# Called with a small dict each time the agent starts a model step or finishes
+# a tool call, so a caller can show progress while the run is still going.
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _emit(on_event: ProgressCallback | None, event: dict[str, Any]) -> None:
+    """Progress is a courtesy: a broken listener must not break the run."""
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception:
+        logger.exception("progress callback failed")
 
 # Tool results are fed back into the prompt, so cap them.
 MAX_TOOL_RESULT_CHARS = 8000
@@ -150,8 +165,11 @@ class ExtractionAgent:
                 max_retries=self.settings.openai_max_retries,
             )
 
-    def run(self, doc: PdfDocument) -> AgentResult:
-        """Run the agent on one document, as a single Langfuse trace."""
+    def run(self, doc: PdfDocument, on_event: ProgressCallback | None = None) -> AgentResult:
+        """Run the agent on one document, as a single Langfuse trace.
+
+        `on_event` receives {"type": "step", ...} before each model call and
+        {"type": "tool", ...} after each tool call."""
         model = self.settings.openai_model
         with (
             propagate(
@@ -176,7 +194,7 @@ class ExtractionAgent:
             ) as root,
         ):
             try:
-                result = self._loop(doc, trace_id=root.trace_id)
+                result = self._loop(doc, trace_id=root.trace_id, on_event=on_event)
             except AgentError as exc:
                 root.update(
                     level="ERROR",
@@ -205,7 +223,12 @@ class ExtractionAgent:
             root.score_trace(name="model_confidence", value=result.extraction.confidence)
             return result
 
-    def _loop(self, doc: PdfDocument, trace_id: str | None = None) -> AgentResult:
+    def _loop(
+        self,
+        doc: PdfDocument,
+        trace_id: str | None = None,
+        on_event: ProgressCallback | None = None,
+    ) -> AgentResult:
         ctx = ToolContext(doc=doc)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -229,6 +252,7 @@ class ExtractionAgent:
         for step in range(1, max_steps + 1):
             if step == max_steps:
                 messages.append({"role": "user", "content": FINAL_STEP_PROMPT})
+            _emit(on_event, {"type": "step", "step": step, "max_steps": max_steps})
 
             with observation(
                 self.langfuse,
@@ -276,6 +300,17 @@ class ExtractionAgent:
             for tc in message.tool_calls:
                 record, payload = self._execute(ctx, step, tc)
                 tool_calls.append(record)
+                _emit(
+                    on_event,
+                    {
+                        "type": "tool",
+                        "step": step,
+                        "tool": record.tool,
+                        "ok": record.ok,
+                        "summary": record.result_summary,
+                        "duration_ms": record.duration_ms,
+                    },
+                )
                 messages.append(
                     {
                         "role": "tool",

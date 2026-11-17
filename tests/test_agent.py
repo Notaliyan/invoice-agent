@@ -196,3 +196,35 @@ def test_provider_extras_on_tool_calls_are_echoed_back(invoice_doc, settings):
     assert assistant["tool_calls"][0]["extra_content"] == {
         "google": {"thought_signature": "sig-123"}
     }
+
+
+def test_progress_events_follow_the_run(invoice_doc, settings):
+    client = FakeOpenAI([
+        turn(tool_call("a", "validate_amounts", VALID_VALIDATION_ARGS)),
+        prose("let me think"),
+        turn(tool_call("b", "submit_extraction", VALID_SUBMISSION)),
+    ])
+    events: list[dict] = []
+    ExtractionAgent(client=client, settings=settings).run(invoice_doc, on_event=events.append)
+
+    assert [(e["type"], e["step"], e.get("tool")) for e in events] == [
+        ("step", 1, None),
+        ("tool", 1, "validate_amounts"),
+        ("step", 2, None),
+        ("step", 3, None),
+        ("tool", 3, "submit_extraction"),
+    ]
+    assert events[1]["ok"] is True and events[1]["summary"]
+    assert events[0]["max_steps"] == settings.agent_max_steps
+
+
+def test_a_failing_progress_listener_does_not_break_the_run(invoice_doc, settings):
+    def broken(event):
+        raise RuntimeError("the browser went away")
+
+    client = FakeOpenAI([
+        turn(tool_call("a", "validate_amounts", VALID_VALIDATION_ARGS)),
+        turn(tool_call("b", "submit_extraction", VALID_SUBMISSION)),
+    ])
+    result = ExtractionAgent(client=client, settings=settings).run(invoice_doc, on_event=broken)
+    assert result.trace.stop_reason == "submitted"

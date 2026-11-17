@@ -34,6 +34,9 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Browser origins allowed to call the API: the dashboard. Comma-separated.
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
     # Where extractions are stored. SQLite needs nothing installed; for Postgres
     # use postgresql+psycopg://user:password@host:5432/dbname. Empty turns
     # storage (and /analytics) off.
