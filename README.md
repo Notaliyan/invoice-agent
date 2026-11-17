@@ -2,7 +2,8 @@
 
 Upload a business document (invoice, receipt, purchase order). A tool-calling
 agent reads it, checks its own arithmetic in Python, and returns validated
-structured JSON.
+structured JSON. Every run is stored in a SQL database, and `/analytics`
+answers questions about the stored data.
 
 The point of this project is the *architecture*, not the extraction quality.
 This is **agent → tool-calling → validated structured output**, which is a
@@ -40,6 +41,13 @@ Run the eval against the golden dataset (live — calls OpenAI, see
 
 ```bash
 python -m evals.run_eval
+```
+
+See what has been stored (see [Storage and analytics](#storage-and-analytics)):
+
+```bash
+curl -s http://127.0.0.1:8000/analytics
+python -m app.analytics.report                    # pandas summary -> reports/summary.md
 ```
 
 ---
@@ -223,6 +231,119 @@ up as a different fingerprint.
 
 ---
 
+## Storage and analytics
+
+Every call to `/process` is written to a database: SQLite by default (a file at
+`data/invoice_agent.db`, nothing to install), or Postgres by setting
+`DATABASE_URL`. Tables are created on first use.
+
+### Schema
+
+```
+documents ──< processing_runs ──(0..1) invoices ──< line_items
+```
+
+| Table | One row per | Holds |
+|---|---|---|
+| `documents` | uploaded file, identified by a hash of its text | filename, page and character counts |
+| `processing_runs` | attempt to extract a document, including failures | status, model, prompt version, steps, tokens, duration, validation result, confidence, Langfuse trace id; eval runs also carry their accuracy scores |
+| `invoices` | successful run | vendor, customer, number, dates, currency, subtotal, tax, total |
+| `line_items` | line on an invoice | description, quantity, unit price, amount |
+
+Uploading the same file twice gives one document with two runs, and the API
+returns the same `document_id` both times. Failed runs are stored too; without
+them the success rate would always read 100%.
+
+`invoices` holds every document type the agent handles, receipts and purchase
+orders included; `document_type` tells them apart.
+
+### The queries
+
+Six hand-written SQL queries in [`app/analytics/queries.py`](app/analytics/queries.py).
+The ORM writes the data; the questions are asked in SQL.
+
+| Query | Answers |
+|---|---|
+| `spend_by_vendor` | Total and average spend per vendor and currency |
+| `monthly_invoice_volume` | Documents and value per month of issue |
+| `processing_performance` | Average, fastest and slowest run; steps and tokens; per model and prompt version |
+| `extraction_quality_over_time` | Success rate, validation pass rate, and eval accuracy per day and prompt version |
+| `top_line_items` | What the money is spent on |
+| `arithmetic_exceptions` | Documents whose line items, subtotal, tax and total disagree |
+
+Two things the queries have to get right:
+
+- **One invoice, many rows.** Re-processing a file adds an invoice row per run,
+  and the same invoice can arrive as two different files. Summing `invoices`
+  directly would double the spend, so the spend queries read from a
+  `current_invoices` CTE: the latest extraction per document, then one row per
+  vendor and invoice number. Documents without an invoice number are never merged.
+- **Currencies are not added together.** Every money query groups by currency.
+
+Accuracy needs a known right answer, which uploads do not have. So
+`extraction_quality_over_time` takes accuracy from eval runs: `python -m
+evals.run_eval` stores each golden case as a processing run with its scores.
+Validation pass rate and confidence are reported for every run.
+
+### `GET /analytics`
+
+Returns every query with its description, the SQL that ran, and the rows:
+
+```jsonc
+{
+  "generated_at": "2026-11-16T23:38:00+00:00",
+  "tables": { "documents": 15, "processing_runs": 39, "invoices": 39, "line_items": 119 },
+  "queries": {
+    "spend_by_vendor": {
+      "description": "Total and average spend per vendor. ...",
+      "sql": "WITH latest_per_document AS ( ... ",
+      "rows": [
+        { "vendor": "Polder Data B.V.", "currency": "EUR", "invoices": 1,
+          "total_spend": 7260, "average_invoice": 7260.0,
+          "first_invoice": "2024-08-22", "last_invoice": "2024-08-22" }
+      ]
+    }
+    // ... five more
+  }
+}
+```
+
+`GET /analytics/{name}` returns one query. `?limit=` caps the ranked queries
+(default 20).
+
+### The pandas report
+
+```bash
+python -m app.analytics.report          # writes reports/summary.md
+```
+
+Reads the same tables into DataFrames and does what is awkward in SQL: a
+month-by-currency pivot, each vendor's share of spend, payment-term medians,
+p90 processing time, the documents the agent gets wrong most often, and
+whether the model's stated confidence tracks its accuracy.
+
+[`reports/summary.md`](reports/summary.md) is a committed example, generated
+from the golden dataset and the three sample PDFs.
+
+### Loading data
+
+```bash
+python -m evals.run_eval --import-history   # past eval runs from evals/results/
+python -m evals.run_eval --concurrency 1    # a fresh run, stored with timing
+```
+
+`--no-store` runs the eval without writing to the database.
+
+### Limits
+
+- Developed and tested on SQLite. The queries avoid dialect-specific functions
+  so they should run on Postgres unchanged, but that has not been run.
+- No migrations. A change to the models means recreating the database or
+  adding Alembic.
+- Durations include time spent waiting out provider rate limits.
+
+---
+
 ## API
 
 ### `POST /process`
@@ -231,7 +352,8 @@ up as a different fingerprint.
 
 ```jsonc
 {
-  "document_id": "1f0c...",
+  "document_id": "1f0c...",   // same id every time this file is uploaded
+  "run_id": 37,               // row in processing_runs; null if storage is off
   "filename": "clean_invoice_eur.pdf",
   "pages": 1,
   "extraction": {
@@ -284,7 +406,12 @@ Useful for testing and for documents you have already extracted.
 
 ### `GET /health`
 
-Liveness plus whether an API key is configured.
+Liveness plus whether an API key, tracing and storage are configured.
+
+### `GET /analytics`, `GET /analytics/{name}`
+
+SQL analytics over everything stored. See
+[Storage and analytics](#storage-and-analytics).
 
 ### Errors
 
@@ -292,6 +419,8 @@ Liveness plus whether an API key is configured.
 |---|---|
 | 400 | Empty upload |
 | 413 | Over `MAX_UPLOAD_BYTES` |
+| 404 | Unknown analytics query name |
+| 503 | `/analytics` with storage turned off |
 | 422 | Not a PDF, no extractable text (scanned image), over the page limit, or the agent ran out of steps — the response includes the partial `trace` so you can see where it gave up |
 
 ---
@@ -311,6 +440,7 @@ All via `.env` (see `.env.example`).
 | `MAX_UPLOAD_BYTES` | `10485760` | 10 MB. |
 | `MAX_PDF_PAGES` | `25` | |
 | `PAGE_PREVIEW_CHARS` | `2500` | How much of page 1 the model sees before it must use tools. |
+| `DATABASE_URL` | `sqlite:///./data/invoice_agent.db` | Where runs are stored. For Postgres: `postgresql+psycopg://user:pass@host/db` plus `pip install "psycopg[binary]"`. Empty turns storage and `/analytics` off. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Both needed to turn tracing on. |
 | `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | EU cloud. Use `https://us.cloud.langfuse.com` or your self-hosted URL. |
 | `LANGFUSE_ENVIRONMENT` | `development` | Set to `production` on the deployed service to keep its traces apart from eval runs. |
@@ -330,13 +460,21 @@ app/
     tools.py          tool implementations + OpenAI tool specs
     prompts.py        system prompt and nudges, PROMPT_VERSION
   observability.py    Langfuse seam: no-op without keys
+  db/
+    models.py         SQLAlchemy models: documents, processing_runs, invoices, line_items
+    session.py        engine + transaction scope (SQLite or Postgres)
+    store.py          record_success / record_failure
+  analytics/
+    queries.py        the six SQL queries
+    report.py         pandas summary report
 evals/
   golden/             12 labelled documents (.txt + .json per case)
   dataset.py          loader + labelling conventions
   scoring.py          field accuracy, completeness, hallucination rate
   run_eval.py         runs the dataset, records to Langfuse + history.jsonl
+  store.py            eval runs -> database, with their scores
   test_golden_eval.py the same run as a pytest quality gate (live)
-tests/                157 tests, all offline (the model and Langfuse are faked)
+tests/                207 tests, all offline (the model and Langfuse are faked)
 samples/              PDF generator: two clean invoices, one with broken math
 ```
 
@@ -352,7 +490,15 @@ usable trace.
 The eval tooling is tested the same way: the scorer has its own tests (a
 subtly wrong metric makes every later run meaningless), the golden labels are
 checked against their documents, and the eval runner is driven end to end by a
-scripted model. `pytest` stays free and offline; only `pytest evals` and
+scripted model.
+
+The SQL is tested against a small database with known answers, one temporary
+SQLite file per test: each query has a test that states the rows it must
+return, including the cases that are easy to get wrong (a re-processed
+document, the same invoice in two files, a run with no recorded duration).
+The API tests never touch the real database.
+
+`pytest` stays free and offline; only `pytest evals` and
 `python -m evals.run_eval` call OpenAI.
 
 ---
@@ -361,7 +507,7 @@ scripted model. `pytest` stays free and offline; only `pytest evals` and
 
 - [x] **Phase 1** — Core agent: PDF upload, tool-calling, validated structured output
 - [x] **Phase 2** — Langfuse tracing, golden dataset and eval pipeline
-- [ ] **Phase 3** — SQL persistence + queryable analytics
+- [x] **Phase 3** — SQL storage, analytics queries, `/analytics` endpoint, pandas report
 - [ ] **Phase 4** — n8n webhook trigger
 - [ ] **Phase 5** — Dashboard
 - [ ] **Phase 6** — Docker Compose + GitHub Actions CI

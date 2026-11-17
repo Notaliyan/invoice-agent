@@ -2,7 +2,9 @@
 
 Two ways in: upload a PDF at /process, or post raw text at /process/text (handy
 for tests and for pasting a document without making a PDF first). Both run the
-same agent and return the same shape.
+same agent and return the same shape, and both store the run in the database.
+
+/analytics answers questions about everything stored so far.
 """
 
 from __future__ import annotations
@@ -12,13 +14,16 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from app.agent.runner import AgentError, ExtractionAgent
+from app import analytics, db
+from app.agent.runner import AgentError, AgentResult, ExtractionAgent
 from app.config import get_settings
 from app.observability import flush as flush_langfuse
 from app.pdf import PdfDocument, PdfExtractionError, extract_pdf
@@ -31,8 +36,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("app")
 
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    if settings.database_url:
+        try:
+            db.get_engine(settings.database_url)  # creates the tables
+        except Exception:
+            logger.exception("database unavailable; runs will not be stored")
     yield
     # Langfuse exports in the background; don't drop the tail on shutdown.
     flush_langfuse(settings)
@@ -40,7 +51,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Document Intelligence Agent",
-    version="0.2.0",
+    version="0.3.0",
     description=(
         "Upload a document; a tool-calling agent reads it, validates the "
         "arithmetic, and returns structured JSON."
@@ -61,20 +72,74 @@ def health() -> dict[str, object]:
         "model": settings.openai_model,
         "openai_key_configured": bool(settings.openai_api_key),
         "langfuse_tracing": settings.langfuse_enabled,
+        "storage": bool(settings.database_url),
     }
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _store_success(
+    doc: PdfDocument, result: AgentResult, duration_ms: int
+) -> tuple[str | None, int | None]:
+    """Persist a finished run. Returns (document id, run id), or (None, None)
+    when storage is off or failed: losing the row must not lose the answer the
+    caller already paid a model for."""
+    if not settings.database_url:
+        return None, None
+    try:
+        with db.session_scope(settings.database_url) as session:
+            run = db.record_success(
+                session,
+                doc,
+                result.extraction,
+                trace=result.trace,
+                validation_passed=result.validation.passed,
+                duration_ms=duration_ms,
+            )
+            return run.document.public_id, run.id
+    except Exception:
+        logger.exception("could not store the run for %s", doc.filename)
+        return None, None
+
+
+def _store_failure(doc: PdfDocument, exc: AgentError, duration_ms: int) -> None:
+    if not settings.database_url:
+        return
+    try:
+        with db.session_scope(settings.database_url) as session:
+            db.record_failure(
+                session,
+                doc,
+                error=str(exc),
+                model=settings.openai_model,
+                trace=exc.trace,
+                duration_ms=duration_ms,
+            )
+    except Exception:
+        logger.exception("could not store the failed run for %s", doc.filename)
 
 
 def _run(doc: PdfDocument, started: float) -> ProcessResponse:
     agent = ExtractionAgent(settings=settings)
-    result = agent.run(doc)
+    try:
+        result = agent.run(doc)
+    except AgentError as exc:
+        _store_failure(doc, exc, _elapsed_ms(started))
+        raise
+
+    duration_ms = _elapsed_ms(started)
+    document_id, run_id = _store_success(doc, result, duration_ms)
     return ProcessResponse(
-        document_id=uuid.uuid4().hex,
+        document_id=document_id or uuid.uuid4().hex,
+        run_id=run_id,
         filename=doc.filename,
         pages=doc.page_count,
         extraction=result.extraction,
         validation=result.validation,
         trace=result.trace,
-        duration_ms=int((time.perf_counter() - started) * 1000),
+        duration_ms=duration_ms,
     )
 
 
@@ -108,6 +173,51 @@ async def process_text(request: TextRequest) -> ProcessResponse:
     started = time.perf_counter()
     doc = PdfDocument.from_text(request.text, filename=request.filename)
     return await run_in_threadpool(_run, doc, started)
+
+
+def _analytics_session():
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="Storage is off: DATABASE_URL is empty.")
+    return db.session_scope(settings.database_url)
+
+
+def _query_payload(name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    query = analytics.QUERIES[name]
+    return {"description": query.description, "sql": query.sql, "rows": rows}
+
+
+@app.get("/analytics")
+def analytics_all(
+    limit: int = Query(
+        analytics.DEFAULT_LIMIT, ge=1, le=500, description="Row cap for ranked queries."
+    ),
+) -> dict[str, Any]:
+    """Every analytics query, with the SQL that produced each result."""
+    with _analytics_session() as session:
+        return {
+            "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "tables": analytics.table_counts(session),
+            "queries": {
+                name: _query_payload(name, rows)
+                for name, rows in analytics.run_all(session, limit=limit).items()
+            },
+        }
+
+
+@app.get("/analytics/{name}")
+def analytics_one(
+    name: str,
+    limit: int = Query(analytics.DEFAULT_LIMIT, ge=1, le=500),
+) -> dict[str, Any]:
+    """One analytics query by name."""
+    if name not in analytics.QUERIES:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown query {name!r}. Available: {sorted(analytics.QUERIES)}",
+        )
+    with _analytics_session() as session:
+        rows = analytics.run_query(session, name, limit=limit)
+        return {"name": name, **_query_payload(name, rows)}
 
 
 @app.exception_handler(AgentError)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -153,3 +153,47 @@ VALID_VALIDATION_ARGS: dict[str, Any] = {
     "tax_rate": 19.0,
     "line_items": VALID_SUBMISSION["line_items"],
 }
+
+
+# ---------------------------------------------------------------------------
+# database
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def database_url(tmp_path) -> Iterator[str]:
+    """A throwaway SQLite file, with its tables created on first use."""
+    from app.db import dispose_engine
+
+    url = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
+    yield url
+    dispose_engine(url)  # release the file so Windows can delete tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _isolated_api_database(monkeypatch, database_url):
+    """The API stores every run. Never let a test write to the real database."""
+    from app import main
+
+    monkeypatch.setattr(main.settings, "database_url", database_url)
+
+
+def make_extraction(**overrides: Any):
+    """VALID_SUBMISSION as an ExtractionResult, with top-level fields replaced."""
+    from app.schemas import ExtractionResult
+
+    return ExtractionResult.model_validate({**VALID_SUBMISSION, **overrides})
+
+
+def make_trace(**overrides: Any):
+    from app.schemas import AgentTrace
+
+    fields: dict[str, Any] = {
+        "model": "fake-model",
+        "prompt_version": "v1",
+        "steps": 4,
+        "stop_reason": "submitted",
+        "prompt_tokens": 400,
+        "completion_tokens": 80,
+    }
+    return AgentTrace(**{**fields, **overrides})

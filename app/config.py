@@ -34,6 +34,11 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Where extractions are stored. SQLite needs nothing installed; for Postgres
+    # use postgresql+psycopg://user:password@host:5432/dbname. Empty turns
+    # storage (and /analytics) off.
+    database_url: str = "sqlite:///./data/invoice_agent.db"
+
     # Langfuse tracing. Optional: with either key missing the agent runs exactly
     # as before and nothing is sent anywhere.
     langfuse_public_key: str = ""

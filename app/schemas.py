@@ -103,7 +103,10 @@ class AgentTrace(BaseModel):
 
 
 class ProcessResponse(BaseModel):
+    # Stable per document: uploading the same file again returns the same id.
     document_id: str
+    # Row in processing_runs; null when storage is off or the write failed.
+    run_id: int | None = None
     filename: str
     pages: int
     extraction: ExtractionResult

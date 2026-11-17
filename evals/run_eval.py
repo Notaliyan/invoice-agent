@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ from app.config import Settings, get_settings
 from app.observability import get_langfuse
 from evals.dataset import GoldenCase, load_cases
 from evals.scoring import LOWER_IS_BETTER, METRICS, CaseScore, aggregate, score_case
+from evals.store import Capture, import_history, store_report
 
 DATASET_NAME = "invoice-golden"
 EXPERIMENT_NAME = "invoice-extraction"
@@ -116,11 +118,25 @@ class EvalReport:
 # ---------------------------------------------------------------------------
 
 
-def run_case(agent: ExtractionAgent, case: GoldenCase) -> dict[str, Any]:
+def run_case(
+    agent: ExtractionAgent,
+    case: GoldenCase,
+    captures: dict[str, Capture] | None = None,
+) -> dict[str, Any]:
     """Run the agent on one golden document. Never raises for an agent failure:
     a failed extraction is a result to be scored, not a crash. A provider
     failure is reported too, but flagged so the run is not mistaken for a
     quality measurement."""
+    started = time.perf_counter()
+
+    def capture(trace: Any) -> None:
+        # Kept out of the returned output, which is what Langfuse stores and
+        # scores; the database wants the timing and the full trace as well.
+        if captures is not None:
+            captures[case.id] = Capture(
+                trace=trace, duration_ms=int((time.perf_counter() - started) * 1000)
+            )
+
     try:
         result = agent.run(case.document())
     except OpenAIError as exc:
@@ -132,12 +148,14 @@ def run_case(agent: ExtractionAgent, case: GoldenCase) -> dict[str, Any]:
             "crashed": True,
         }
     except AgentError as exc:
+        capture(exc.trace)
         return {
             "extraction": None,
             "error": str(exc),
             "validation_passed": None,
             "steps": exc.trace.steps if exc.trace else 0,
         }
+    capture(result.trace)
     return {
         "extraction": result.extraction.model_dump(mode="json"),
         "error": None,
@@ -159,8 +177,10 @@ def _case_result(case: GoldenCase, output: dict[str, Any], trace_id: str | None)
     )
 
 
-def _run_locally(agent: ExtractionAgent, cases: list[GoldenCase]) -> list[CaseResult]:
-    return [_case_result(case, run_case(agent, case), None) for case in cases]
+def _run_locally(
+    agent: ExtractionAgent, cases: list[GoldenCase], captures: dict[str, Capture]
+) -> list[CaseResult]:
+    return [_case_result(case, run_case(agent, case, captures), None) for case in cases]
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +221,7 @@ def _run_with_langfuse(
     cases: list[GoldenCase],
     run_name: str,
     concurrency: int,
+    captures: dict[str, Capture],
 ) -> tuple[list[CaseResult], str | None]:
     from langfuse import Evaluation
 
@@ -212,7 +233,7 @@ def _run_with_langfuse(
     items = [item for item in dataset.items if _case_id(item) in by_id]
 
     def task(*, item: Any, **_: Any) -> dict[str, Any]:
-        return run_case(agent, by_id[_case_id(item)])
+        return run_case(agent, by_id[_case_id(item)], captures)
 
     def evaluator(
         *, output: Any, expected_output: Any, metadata: Any, **_: Any
@@ -333,8 +354,10 @@ def run_eval(
     record: bool = True,
     results_dir: Path = RESULTS_DIR,
     concurrency: int = 4,
+    database_url: str | None = None,
 ) -> EvalReport:
-    """Run and score the golden dataset. `client` lets tests pass a fake OpenAI."""
+    """Run and score the golden dataset. `client` lets tests pass a fake OpenAI.
+    With `database_url`, every case is also stored as a processing run."""
     settings = settings or get_settings()
     cases = cases if cases is not None else load_cases()
     agent = ExtractionAgent(client=client, settings=settings)
@@ -343,10 +366,13 @@ def run_eval(
     run_name = f"{PROMPT_VERSION}-{settings.openai_model}-{now:%Y%m%d-%H%M%S}"
 
     langfuse = get_langfuse(settings) if use_langfuse else None
+    captures: dict[str, Capture] = {}
     if langfuse is not None:
-        results, url = _run_with_langfuse(langfuse, agent, cases, run_name, concurrency)
+        results, url = _run_with_langfuse(
+            langfuse, agent, cases, run_name, concurrency, captures
+        )
     else:
-        results, url = _run_locally(agent, cases), None
+        results, url = _run_locally(agent, cases, captures), None
 
     report = EvalReport(
         run_name=run_name,
@@ -363,6 +389,8 @@ def run_eval(
     # against, so it is never written to history.
     if record and not report.crashed_cases:
         _record(report, results_dir)
+    if database_url:
+        store_report(database_url, report, cases, captures)
     return report
 
 
@@ -413,6 +441,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-langfuse", action="store_true", help="score locally only")
     parser.add_argument("--no-record", action="store_true", help="do not append to history")
     parser.add_argument("--sync-only", action="store_true", help="upload the dataset and exit")
+    parser.add_argument("--no-store", action="store_true", help="do not write to the database")
+    parser.add_argument(
+        "--import-history",
+        action="store_true",
+        help="load past runs from evals/results into the database and exit",
+    )
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE)
     parser.add_argument(
@@ -438,6 +472,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"synced {len(cases)} items to Langfuse dataset {DATASET_NAME!r}")
         return 0
 
+    if args.import_history:
+        if not settings.database_url:
+            parser.error("DATABASE_URL is empty")
+        imported = import_history(settings.database_url, RESULTS_DIR)
+        for run_name, count in imported.items():
+            print(f"imported {count} runs from {run_name}")
+        if not imported:
+            print("nothing to import (no saved runs, or all already in the database)")
+        return 0
+
     if not settings.openai_api_key:
         parser.error("OPENAI_API_KEY is not set (put it in .env)")
     if not settings.langfuse_enabled and not args.no_langfuse:
@@ -449,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         use_langfuse=not args.no_langfuse,
         record=not args.no_record,
         concurrency=args.concurrency,
+        database_url=None if args.no_store else settings.database_url or None,
     )
     print(format_report(report, args.tolerance))
     if report.crashed_cases:

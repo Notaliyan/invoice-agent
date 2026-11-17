@@ -151,3 +151,62 @@ def test_agent_failure_is_not_a_provider_failure(cases, settings, tmp_path):
 
     assert report.crashed_cases == []
     assert len(load_history(tmp_path)) == 1
+
+
+# ---------------------------------------------------------------------------
+# the database
+# ---------------------------------------------------------------------------
+
+
+def _eval_runs(database_url):
+    from sqlalchemy import select
+
+    from app import db
+
+    with db.session_scope(database_url) as session:
+        runs = session.scalars(select(db.ProcessingRun).order_by(db.ProcessingRun.id)).all()
+        return [
+            (r.source, r.status, r.eval_run_name, r.field_accuracy, r.duration_ms) for r in runs
+        ]
+
+
+def test_eval_cases_are_stored_as_scored_runs(cases, settings, tmp_path, database_url):
+    client = FakeOpenAI([prose("hmm")] * settings.agent_max_steps + perfect_script(cases[1]))
+    report = run_eval(
+        settings=settings, client=client, cases=cases, results_dir=tmp_path,
+        database_url=database_url,
+    )
+
+    failed, passed = _eval_runs(database_url)
+    assert failed[:4] == ("eval", "failed", report.run_name, 0.0)
+    assert passed[:4] == ("eval", "succeeded", report.run_name, 1.0)
+    assert passed[4] is not None and passed[4] >= 0  # timed
+
+
+def test_cases_the_provider_failed_on_are_not_stored(cases, settings, tmp_path, database_url):
+    client = RateLimitedAfter(perfect_script(cases[0]))
+    run_eval(
+        settings=settings, client=client, cases=cases, results_dir=tmp_path,
+        database_url=database_url,
+    )
+    assert [r[1] for r in _eval_runs(database_url)] == ["succeeded"]
+
+
+def test_nothing_is_stored_without_a_database_url(cases, settings, tmp_path, database_url):
+    client = FakeOpenAI([step for case in cases for step in perfect_script(case)])
+    run_eval(settings=settings, client=client, cases=cases, results_dir=tmp_path)
+    assert _eval_runs(database_url) == []
+
+
+def test_past_runs_can_be_imported_once(cases, settings, tmp_path, database_url):
+    from evals.store import import_history
+
+    client = FakeOpenAI([step for case in cases for step in perfect_script(case)])
+    report = run_eval(settings=settings, client=client, cases=cases, results_dir=tmp_path)
+
+    assert import_history(database_url, tmp_path) == {report.run_name: 2}
+    assert import_history(database_url, tmp_path) == {}  # already there
+
+    runs = _eval_runs(database_url)
+    assert [r[:4] for r in runs] == [("eval", "succeeded", report.run_name, 1.0)] * 2
+    assert all(r[4] is None for r in runs)  # the saved files hold no timing

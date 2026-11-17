@@ -14,6 +14,7 @@ venv/
 
 # Data
 uploads/
+data/
 *.db
 *.sqlite3
 
