@@ -2,15 +2,17 @@
 .env
 .env.*
 .git
+.github
 .venv
 venv
 data
 reports
 n8n
-evals
 tests
 samples
 docs
+# Per-run eval dumps are local only; history.jsonl (the committed baseline) stays in.
+evals/results/*.json
 __pycache__
 *.pyc
 .pytest_cache

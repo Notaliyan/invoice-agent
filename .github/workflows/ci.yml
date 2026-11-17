@@ -1,0 +1,150 @@
+name: CI
+
+# Every push and pull request:
+#   1. test  - lint, then the offline test suite on SQLite and again on Postgres
+#   2. eval  - build the Docker image, start it with Postgres, smoke-test the
+#              endpoints, then run the agent on the golden dataset inside that
+#              image and fail if quality misses the bar or regresses
+#
+# The eval makes real model calls, so it needs the OPENAI_API_KEY repository
+# secret. Without it (a fork, or before the secret is added) the eval step is
+# skipped with a notice and everything else still runs.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: invoice
+          POSTGRES_PASSWORD: invoice_ci
+          # The fixtures drop every table, and refuse any name not ending in _test.
+          POSTGRES_DB: invoice_agent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U invoice -d invoice_agent_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests (SQLite)
+        run: pytest
+
+      - name: Tests (Postgres)
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://invoice:invoice_ci@localhost:5432/invoice_agent_test
+        run: pytest
+
+  eval:
+    name: Docker build and golden eval
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Present only where the secret is; used to decide whether to run the eval.
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write .env for the container
+        # Model settings default to the ones the committed baseline
+        # (evals/results/history.jsonl) was measured with; override them with
+        # repository variables. Langfuse stays off: CI scores locally.
+        run: |
+          {
+            echo "OPENAI_API_KEY=${OPENAI_API_KEY}"
+            echo "OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai/' }}"
+            echo "OPENAI_MODEL=${{ vars.OPENAI_MODEL || 'gemini-3.5-flash-lite' }}"
+            echo "OPENAI_MAX_RETRIES=${{ vars.OPENAI_MAX_RETRIES || '10' }}"
+            echo "LANGFUSE_ENVIRONMENT=ci"
+          } > .env
+
+      - name: Build the image
+        run: docker compose build api
+
+      - name: Start the database and the API
+        run: docker compose up -d --wait db api
+
+      - name: Smoke-test the endpoints
+        run: |
+          set -euo pipefail
+          curl -fsS http://localhost:8000/health
+          echo
+          # Runs all six SQL queries against a fresh Postgres.
+          curl -fsS http://localhost:8000/analytics | python -c "
+          import json, sys
+          body = json.load(sys.stdin)
+          assert len(body['queries']) == 6, body['queries'].keys()
+          print('analytics ok:', body['tables'])"
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            -d '{"text": "CI smoke test"}' http://localhost:8000/notifications
+          echo
+
+      - name: Golden dataset eval
+        if: env.OPENAI_API_KEY != ''
+        # Inside the image that was just built. --no-record: CI compares with
+        # the committed history but never rewrites it. Exit 1 = quality missed
+        # the bar or regressed; exit 2 = the model provider failed.
+        run: |
+          set -o pipefail
+          docker compose run --rm -T api \
+            python -m evals.run_eval --concurrency 1 --no-record --gate --fail-on-regression \
+            | tee eval-report.txt
+
+      - name: Publish the eval report
+        if: always() && hashFiles('eval-report.txt') != ''
+        run: |
+          {
+            echo "## Golden dataset eval"
+            echo
+            echo '```text'
+            cat eval-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Eval skipped
+        if: env.OPENAI_API_KEY == ''
+        run: echo "::notice title=Golden eval skipped::The OPENAI_API_KEY repository secret is not set, so the agent was not scored on this run."
+
+      - name: API logs
+        if: failure()
+        run: docker compose logs api db
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v

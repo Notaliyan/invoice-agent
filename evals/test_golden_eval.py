@@ -1,13 +1,15 @@
-"""The eval as a pytest suite: a quality gate you can put in CI.
+"""The eval as a pytest suite: a quality gate you can run by hand.
 
-    pytest evals                 # live: calls OpenAI, ~12 documents
+    pytest evals                 # live: calls the model, ~12 documents
 
 This is NOT part of the default `pytest` run (testpaths = tests), because it
-costs money and needs a key. It is skipped when OPENAI_API_KEY is absent.
+needs a key and makes ~50 model calls. It is skipped when OPENAI_API_KEY is
+absent. CI runs the same gate through `python -m evals.run_eval --gate`.
 
 The whole dataset is run once per session - recorded to Langfuse and to
 evals/results/history.jsonl exactly like `python -m evals.run_eval` - and then
-each test asserts on a slice of that one run.
+each test asserts on a slice of that one run. The numbers live in
+evals/thresholds.py.
 """
 
 from __future__ import annotations
@@ -17,26 +19,17 @@ import pytest
 from app.config import get_settings
 from evals.dataset import load_cases
 from evals.run_eval import EvalReport, format_report, run_eval
+from evals.thresholds import (
+    AGGREGATE_FLOORS,
+    MAX_HALLUCINATION_RATE,
+    PER_CASE_MAX_HALLUCINATION,
+    PER_CASE_MIN_ACCURACY,
+)
 
 pytestmark = pytest.mark.skipif(
     not get_settings().openai_api_key,
     reason="live eval: set OPENAI_API_KEY to run",
 )
-
-# Set just under the measured runs in evals/results/history.jsonl (prompt v2 on
-# gemini-3.5-flash-lite: accuracy 0.994, completeness 1.000, hallucination
-# 0.012). Those are single runs, so the margins allow for run-to-run noise;
-# re-measure before tightening, and after switching model.
-AGGREGATE_FLOORS = {
-    "field_accuracy": 0.95,
-    "extraction_completeness": 0.95,
-}
-MAX_HALLUCINATION_RATE = 0.03
-
-# No single document may fall apart, even if the average looks fine. The worst
-# measured case scores 0.93 accuracy and 0.14 hallucination.
-PER_CASE_MIN_ACCURACY = 0.85
-PER_CASE_MAX_HALLUCINATION = 0.20
 
 CASE_IDS = [case.id for case in load_cases()]
 

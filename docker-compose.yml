@@ -1,24 +1,51 @@
-# The agent API and n8n, side by side.
+# The whole stack: the agent API, its Postgres database, and n8n.
 #
 #   docker compose up -d --build
 #
-#   API   http://localhost:8000      (n8n reaches it as http://app:8000)
+#   api   http://localhost:8000      (other services reach it as http://api:8000)
+#   db    localhost:5432             (Postgres; user and database below)
 #   n8n   http://localhost:5678
 #
-# See "Workflow automation (n8n)" in the README for importing the workflow.
+# CI starts only `db` and `api`. See "Continuous integration" and "Workflow
+# automation (n8n)" in the README.
 
 services:
-  app:
-    build: .
-    env_file: .env
+  db:
+    image: postgres:16-alpine
     environment:
-      # Four slashes: an absolute path inside the container.
-      DATABASE_URL: sqlite:////app/data/invoice_agent.db
+      POSTGRES_USER: invoice
+      # A development default. Set POSTGRES_PASSWORD in .env for anything that
+      # is reachable from outside this machine.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-invoice_dev}
+      POSTGRES_DB: invoice_agent
+    ports:
+      # Bound to this machine only, for psql and other SQL clients.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U invoice -d invoice_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: .
+    # Keys come from .env. Optional so the stack also starts without one (CI
+    # brings it up to smoke-test the endpoints before any key is involved).
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Set here, after env_file, so the container always uses the db service
+      # whatever DATABASE_URL a local .env holds.
+      DATABASE_URL: postgresql+psycopg://invoice:${POSTGRES_PASSWORD:-invoice_dev}@db:5432/invoice_agent
     ports:
       - "8000:8000"
-    volumes:
-      # The same database file local runs use, so /analytics sees both.
-      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   n8n:
@@ -48,20 +75,21 @@ services:
       # The workflow reads the two URLs below with $env; n8n 2.0 blocks that
       # unless told otherwise. Acceptable here: one user, one machine.
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
-      AGENT_URL: http://app:8000
+      AGENT_URL: http://api:8000
       # Where results are announced. Any endpoint that accepts {"text": "..."}
       # works, e.g. a Slack incoming webhook. The default is the API's own
       # /notifications inbox, so the stack works with no outside account.
-      NOTIFY_WEBHOOK_URL: ${NOTIFY_WEBHOOK_URL:-http://app:8000/notifications}
+      NOTIFY_WEBHOOK_URL: ${NOTIFY_WEBHOOK_URL:-http://api:8000/notifications}
     volumes:
       - n8n_data:/home/node/.n8n
       # Drop a PDF into n8n/files/inbox on the host and the workflow picks it up.
       - ./n8n/files:/files
       - ./n8n/workflows:/workflows:ro
     depends_on:
-      app:
+      api:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
+  pg_data:
   n8n_data:

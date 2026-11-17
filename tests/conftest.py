@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from collections.abc import Iterable, Iterator
 from types import SimpleNamespace
 from typing import Any
@@ -162,10 +163,30 @@ VALID_VALIDATION_ARGS: dict[str, Any] = {
 
 @pytest.fixture
 def database_url(tmp_path) -> Iterator[str]:
-    """A throwaway SQLite file, with its tables created on first use."""
-    from app.db import dispose_engine
+    """An empty database for one test.
 
-    url = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
+    A throwaway SQLite file by default. With TEST_DATABASE_URL set (CI points
+    it at Postgres), that database is used instead and wiped before each test,
+    so the same tests prove the SQL on both.
+    """
+    from sqlalchemy.engine import make_url
+
+    from app.db import Base, dispose_engine, get_engine
+
+    url = os.environ.get("TEST_DATABASE_URL")
+    if url:
+        name = make_url(url).database or ""
+        if not name.endswith("_test"):
+            # Every table is dropped below. Refuse anything that is not
+            # unmistakably a test database.
+            raise RuntimeError(
+                f"TEST_DATABASE_URL must name a database ending in '_test', not {name!r}"
+            )
+        engine = get_engine(url)
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+    else:
+        url = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
     yield url
     dispose_engine(url)  # release the file so Windows can delete tmp_path
 

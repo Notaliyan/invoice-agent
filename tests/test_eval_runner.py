@@ -9,6 +9,7 @@ from openai import OpenAIError
 
 from evals.dataset import GoldenCase, load_cases
 from evals.run_eval import format_report, load_history, main, run_eval
+from evals.thresholds import violations
 from tests.conftest import FakeOpenAI, prose, tool_call, turn
 
 
@@ -210,3 +211,94 @@ def test_past_runs_can_be_imported_once(cases, settings, tmp_path, database_url)
     runs = _eval_runs(database_url)
     assert [r[:4] for r in runs] == [("eval", "succeeded", report.run_name, 1.0)] * 2
     assert all(r[4] is None for r in runs)  # the saved files hold no timing
+
+
+# ---------------------------------------------------------------------------
+# the quality gate
+# ---------------------------------------------------------------------------
+
+
+def _report(cases, settings, tmp_path, script):
+    return run_eval(
+        settings=settings, client=FakeOpenAI(script), cases=cases, results_dir=tmp_path,
+        record=False,
+    )
+
+
+def test_a_perfect_run_clears_the_gate(cases, settings, tmp_path):
+    report = _report(
+        cases, settings, tmp_path, [step for case in cases for step in perfect_script(case)]
+    )
+    assert violations(report) == []
+
+
+def test_the_gate_names_what_fell_short(cases, settings, tmp_path):
+    report = _report(
+        cases, settings, tmp_path,
+        [prose("hmm")] * settings.agent_max_steps + perfect_script(cases[1]),
+    )
+    missed = violations(report)
+
+    assert any(line.startswith("field_accuracy 0.500 is below") for line in missed)
+    assert f"{cases[0].id}: no extraction produced" in missed
+    assert not any(cases[1].id in line for line in missed)
+
+
+def test_one_bad_document_fails_the_gate_even_if_the_average_holds(cases, settings, tmp_path):
+    invented = {
+        **cases[0].expected,
+        "invoice_number": "MADE-UP-1",
+        "due_date": "1999-01-01",
+        "subtotal": 1.23,
+        "tax_amount": 4.56,
+    }
+    script = perfect_script(cases[0])[:1] + [
+        turn(tool_call("s", "submit_extraction", {**invented, "confidence": 0.9}))
+    ]
+    report = _report(cases, settings, tmp_path, script + perfect_script(cases[1]))
+
+    missed = violations(report)
+    assert any(line.startswith(f"{cases[0].id}: hallucination rate") for line in missed)
+
+
+@pytest.mark.parametrize(
+    ("script_for", "expected_exit", "expected_text"),
+    [
+        ("perfect", 0, "QUALITY GATE PASSED"),
+        ("failing", 1, "QUALITY GATE FAILED"),
+        ("provider-down", 2, "INCOMPLETE RUN"),
+    ],
+)
+def test_cli_gate_exit_codes(
+    monkeypatch, cases, settings, tmp_path, capsys, script_for, expected_exit, expected_text
+):
+    if script_for == "perfect":
+        client = FakeOpenAI([step for case in cases for step in perfect_script(case)])
+    elif script_for == "failing":
+        client = FakeOpenAI(
+            [prose("hmm")] * settings.agent_max_steps + perfect_script(cases[1])
+        )
+    else:
+        client = RateLimitedAfter(perfect_script(cases[0]))
+    report = run_eval(
+        settings=settings, client=client, cases=cases, results_dir=tmp_path, record=False
+    )
+    monkeypatch.setattr("evals.run_eval.get_settings", lambda: settings)
+    monkeypatch.setattr("evals.run_eval.run_eval", lambda **kwargs: report)
+
+    assert main(["--gate"]) == expected_exit
+    assert expected_text in capsys.readouterr().out
+
+
+def test_without_the_flag_a_poor_run_still_exits_zero(
+    monkeypatch, cases, settings, tmp_path, capsys
+):
+    client = FakeOpenAI([prose("hmm")] * settings.agent_max_steps + perfect_script(cases[1]))
+    report = run_eval(
+        settings=settings, client=client, cases=cases, results_dir=tmp_path, record=False
+    )
+    monkeypatch.setattr("evals.run_eval.get_settings", lambda: settings)
+    monkeypatch.setattr("evals.run_eval.run_eval", lambda **kwargs: report)
+
+    assert main([]) == 0
+    assert "QUALITY GATE" not in capsys.readouterr().out

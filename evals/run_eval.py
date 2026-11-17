@@ -35,6 +35,7 @@ from app.observability import get_langfuse
 from evals.dataset import GoldenCase, load_cases
 from evals.scoring import LOWER_IS_BETTER, METRICS, CaseScore, aggregate, score_case
 from evals.store import Capture, import_history, store_report
+from evals.thresholds import violations
 
 DATASET_NAME = "invoice-golden"
 EXPERIMENT_NAME = "invoice-extraction"
@@ -443,6 +444,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sync-only", action="store_true", help="upload the dataset and exit")
     parser.add_argument("--no-store", action="store_true", help="do not write to the database")
     parser.add_argument(
+        "--gate",
+        action="store_true",
+        help="exit 1 if the run misses the thresholds in evals/thresholds.py",
+    )
+    parser.add_argument(
         "--import-history",
         action="store_true",
         help="load past runs from evals/results into the database and exit",
@@ -497,8 +503,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(format_report(report, args.tolerance))
     if report.crashed_cases:
+        # Not a verdict on the agent: the provider failed. Distinct exit code
+        # so CI can tell "quality dropped" from "could not measure".
         return 2
-    return 1 if args.fail_on_regression and report.regressions(args.tolerance) else 0
+
+    failed = False
+    if args.gate:
+        missed = violations(report)
+        if missed:
+            print("\nQUALITY GATE FAILED:")
+            for line in missed:
+                print(f"  {line}")
+            failed = True
+        else:
+            print("\nQUALITY GATE PASSED")
+    if args.fail_on_regression and report.regressions(args.tolerance):
+        failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

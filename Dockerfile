@@ -1,4 +1,5 @@
-# The API as a container. Built by docker-compose.yml; n8n calls it at http://app:8000.
+# The API as a container. Built by docker-compose.yml and by CI; other services
+# call it at http://api:8000.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -12,8 +13,12 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
+# The golden dataset and eval runner ship in the image, so CI scores exactly
+# the code and dependencies that would be deployed:
+#   docker compose run --rm api python -m evals.run_eval --gate
+COPY evals ./evals
 
-# Run as an ordinary user; /app/data holds the SQLite file.
+# Run as an ordinary user; /app/data is where a SQLite database would go.
 RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p /app/data \
     && chown -R appuser:appuser /app

@@ -1,5 +1,7 @@
 # Document Intelligence Agent
 
+[![CI](https://github.com/Notaliyan/invoice-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Notaliyan/invoice-agent/actions/workflows/ci.yml)
+
 Upload a business document (invoice, receipt, purchase order). A tool-calling
 agent reads it, checks its own arithmetic in Python, and returns validated
 structured JSON. Every run is stored in a SQL database, and `/analytics`
@@ -235,7 +237,14 @@ up as a different fingerprint.
 
 Every call to `/process` is written to a database: SQLite by default (a file at
 `data/invoice_agent.db`, nothing to install), or Postgres by setting
-`DATABASE_URL`. Tables are created on first use.
+`DATABASE_URL`. `docker compose up` runs the API against a Postgres service.
+Tables are created on first use.
+
+With the stack running, the data is one command away in plain SQL:
+
+```bash
+docker compose exec db psql -U invoice -d invoice_agent -c "SELECT prompt_version, COUNT(*) AS runs, ROUND(AVG(field_accuracy)::numeric, 3) AS accuracy FROM processing_runs WHERE source = 'eval' GROUP BY prompt_version ORDER BY prompt_version"
+```
 
 ### Schema
 
@@ -336,8 +345,8 @@ python -m evals.run_eval --concurrency 1    # a fresh run, stored with timing
 
 ### Limits
 
-- Developed and tested on SQLite. The queries avoid dialect-specific functions
-  so they should run on Postgres unchanged, but that has not been run.
+- The same queries run on SQLite and Postgres 16; CI runs the whole test
+  suite against both. No other database has been tried.
 - No migrations. A change to the models means recreating the database or
   adding Alembic.
 - Durations include time spent waiting out provider rate limits.
@@ -484,8 +493,9 @@ shown working without an outside account. It is a demo aid, not a message store.
   and `N8N_RESTRICT_FILE_ACCESS_TO` limits file nodes to the mounted `/files`.
 - **Polling for the folder watch.** File-change events do not cross from a
   Windows host into a Linux container, so the trigger polls.
-- **One database.** The API container mounts `./data`, the same SQLite file
-  local runs use.
+- **Postgres in the stack.** The API container stores its runs in the `db`
+  service, not in the SQLite file that `uvicorn` on the host uses, so the two
+  do not share data.
 
 ### Limits
 
@@ -497,6 +507,59 @@ shown working without an outside account. It is a demo aid, not a message store.
   moves or deletes it.
 - The webhook caller waits for the whole extraction, 10 to 60 seconds on a
   free-tier model.
+
+---
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and
+pull request, in two jobs.
+
+| Job | What it does |
+|---|---|
+| **Lint and tests** | `ruff`, then the offline test suite twice: on SQLite, and on a Postgres 16 service container |
+| **Docker build and golden eval** | Builds the image, starts it with Postgres through `docker compose`, smoke-tests `/health`, `/analytics` and `/notifications`, then runs the agent on the 12 golden documents inside that image |
+
+The eval step is the quality gate:
+
+```bash
+docker compose run --rm api python -m evals.run_eval --concurrency 1 --no-record --gate --fail-on-regression
+```
+
+| Exit code | Meaning | CI |
+|---|---|---|
+| 0 | Quality is at or above the bar and no worse than the last recorded run | passes |
+| 1 | A threshold in [`evals/thresholds.py`](evals/thresholds.py) was missed, or a metric regressed against `evals/results/history.jsonl` | fails |
+| 2 | The model provider failed (rate limit, outage, bad key), so quality could not be measured | fails |
+
+The thresholds: field accuracy and completeness at least 0.95, hallucination
+rate at most 0.03, and no single document below 0.85 accuracy or above 0.20
+hallucination. The full per-document report is printed in the job log and on
+the run's summary page.
+
+So a prompt change that makes extraction worse fails CI on its branch, before
+it is merged.
+
+### Setting it up
+
+The eval makes real model calls and needs one repository secret:
+**Settings → Secrets and variables → Actions → New repository secret**, named
+`OPENAI_API_KEY`. Without it, the eval step is skipped with a notice and the
+rest of CI still runs.
+
+The model settings default to the ones the committed baseline was measured
+with (`gemini-3.5-flash-lite` through Gemini's OpenAI-compatible endpoint). To
+change them, add repository variables `OPENAI_MODEL`, `OPENAI_BASE_URL` and
+`OPENAI_MAX_RETRIES`.
+
+### Limits
+
+- Each run makes about 50 model calls. On a free tier with a daily cap, enough
+  pushes in a day will end in exit code 2.
+- The gate compares against a baseline measured on one model. Change the model
+  and the baseline has to be re-recorded with `python -m evals.run_eval`.
+- A model is not perfectly repeatable. The thresholds leave a margin and the
+  regression check tolerates 0.02, but a rare unlucky run can still fail.
 
 ---
 
@@ -601,7 +664,8 @@ All via `.env` (see `.env.example`).
 | `MAX_UPLOAD_BYTES` | `10485760` | 10 MB. |
 | `MAX_PDF_PAGES` | `25` | |
 | `PAGE_PREVIEW_CHARS` | `2500` | How much of page 1 the model sees before it must use tools. |
-| `DATABASE_URL` | `sqlite:///./data/invoice_agent.db` | Where runs are stored. For Postgres: `postgresql+psycopg://user:pass@host/db` plus `pip install "psycopg[binary]"`. Empty turns storage and `/analytics` off. |
+| `DATABASE_URL` | `sqlite:///./data/invoice_agent.db` | Where runs are stored. For Postgres: `postgresql+psycopg://user:pass@host/db`. Empty turns storage and `/analytics` off. `docker compose` sets it to the `db` service. |
+| `POSTGRES_PASSWORD` | `invoice_dev` | `docker compose` only: password for the `db` service. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Both needed to turn tracing on. |
 | `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | EU cloud. Use `https://us.cloud.langfuse.com` or your self-hosted URL. |
 | `LANGFUSE_ENVIRONMENT` | `development` | Set to `production` on the deployed service to keep its traces apart from eval runs. |
@@ -634,14 +698,16 @@ evals/
   scoring.py          field accuracy, completeness, hallucination rate
   run_eval.py         runs the dataset, records to Langfuse + history.jsonl
   store.py            eval runs -> database, with their scores
+  thresholds.py       the quality bar, shared by CI and `pytest evals`
   test_golden_eval.py the same run as a pytest quality gate (live)
-tests/                218 tests, all offline (the model and Langfuse are faked)
+tests/                225 tests, all offline (the model and Langfuse are faked)
 samples/              PDF generator: two clean invoices, one with broken math
 n8n/
   workflows/          invoice-intake.json, the n8n workflow
   files/inbox/        drop a PDF here and the workflow picks it up
-Dockerfile            the API as a container
-docker-compose.yml    the API and n8n together
+Dockerfile            the API (and the eval runner) as a container
+docker-compose.yml    api + db (Postgres) + n8n
+.github/workflows/    ci.yml: lint, tests on SQLite and Postgres, Docker build, golden eval
 ```
 
 ## Testing approach
@@ -659,7 +725,8 @@ checked against their documents, and the eval runner is driven end to end by a
 scripted model.
 
 The SQL is tested against a small database with known answers, one temporary
-SQLite file per test: each query has a test that states the rows it must
+SQLite file per test (or, with `TEST_DATABASE_URL` set, a Postgres database
+that is wiped before each test; CI does both): each query has a test that states the rows it must
 return, including the cases that are easy to get wrong (a re-processed
 document, the same invoice in two files, a run with no recorded duration).
 The API tests never touch the real database.
@@ -675,5 +742,5 @@ The API tests never touch the real database.
 - [x] **Phase 2** — Langfuse tracing, golden dataset and eval pipeline
 - [x] **Phase 3** — SQL storage, analytics queries, `/analytics` endpoint, pandas report
 - [x] **Phase 4** — n8n workflow: webhook or new file → agent → route → notify
-- [ ] **Phase 5** — Dashboard
-- [ ] **Phase 6** — Docker Compose + GitHub Actions CI
+- [x] **Phase 5** — Postgres in Docker Compose, GitHub Actions CI with the golden eval as a quality gate
+- [ ] **Phase 6** — Dashboard
