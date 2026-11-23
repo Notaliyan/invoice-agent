@@ -228,3 +228,26 @@ def test_a_failing_progress_listener_does_not_break_the_run(invoice_doc, setting
     ])
     result = ExtractionAgent(client=client, settings=settings).run(invoice_doc, on_event=broken)
     assert result.trace.stop_reason == "submitted"
+
+
+def test_a_document_that_does_not_add_up_is_accepted_as_printed(invoice_doc, settings):
+    # The printed total is 10.00 more than subtotal + tax. The agent validates
+    # the printed figures, sees a failed check, and submits them unchanged.
+    broken = {**VALID_VALIDATION_ARGS, "total": 4977.06}
+    client = FakeOpenAI([
+        turn(tool_call("a", "validate_amounts", broken)),
+        turn(tool_call("b", "submit_extraction", {
+            **VALID_SUBMISSION, "total": 4977.06, "confidence": 0.6,
+            "notes": "Printed total is 10.00 more than subtotal + tax.",
+        })),
+    ])
+    result = ExtractionAgent(client=client, settings=settings).run(invoice_doc)
+
+    assert result.extraction.total == 4977.06
+    assert result.validation.passed is False
+    failed = [c.name for c in result.validation.checks if not c.passed]
+    assert failed == ["subtotal_plus_tax_equals_total"]
+
+    # What the model was told after the failed check.
+    told = client.completions.requests[1]["messages"][-1]["content"]
+    assert "submit the printed figures unchanged" in told

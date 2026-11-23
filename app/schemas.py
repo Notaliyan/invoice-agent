@@ -14,6 +14,16 @@ from pydantic import BaseModel, Field, field_validator
 
 DocumentType = Literal["invoice", "receipt", "purchase_order", "contract", "other"]
 
+# Models sometimes write "no value" as text instead of leaving the field empty.
+# That text would be stored and shown as if it had been read off the document.
+_NO_VALUE = {"", "null", "none", "n/a", "na", "-", "unknown", "not provided", "not stated"}
+
+
+def _blank_to_none(value: Any) -> Any:
+    if isinstance(value, str) and value.strip().lower() in _NO_VALUE:
+        return None
+    return value
+
 
 class LineItem(BaseModel):
     description: str
@@ -27,6 +37,10 @@ class Party(BaseModel):
     address: str | None = None
     tax_id: str | None = None
     email: str | None = None
+
+    _no_value = field_validator("address", "tax_id", "email", mode="before")(
+        classmethod(lambda cls, v: _blank_to_none(v))
+    )
 
 
 class ExtractionResult(BaseModel):
@@ -48,6 +62,18 @@ class ExtractionResult(BaseModel):
 
     confidence: float = Field(ge=0.0, le=1.0)
     notes: str | None = None
+
+    _no_value = field_validator(
+        "invoice_number", "issue_date", "due_date", "notes", mode="before"
+    )(classmethod(lambda cls, v: _blank_to_none(v)))
+
+    @field_validator("customer", mode="before")
+    @classmethod
+    def _no_customer(cls, v: Any) -> Any:
+        # {"name": "null"} is no customer, not a customer called "null".
+        if isinstance(v, dict) and _blank_to_none(v.get("name")) is None:
+            return None
+        return _blank_to_none(v)
 
     @field_validator("currency")
     @classmethod

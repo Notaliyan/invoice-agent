@@ -49,3 +49,35 @@ def test_written_month_is_parsed():
 
 def test_nonsense_date_yields_nothing():
     assert parse_date_candidates("99/99/9999") == []
+
+
+
+@pytest.mark.parametrize("text", ["null", "None", "N/A", "  ", "unknown", "-"])
+def test_no_value_written_as_text_becomes_empty(text):
+    from app.schemas import ExtractionResult
+    from tests.conftest import VALID_SUBMISSION
+
+    result = ExtractionResult.model_validate({
+        **VALID_SUBMISSION,
+        "vendor": {"name": "Acme", "tax_id": text, "email": text},
+        "customer": {"name": text},
+        "invoice_number": text,
+        "due_date": text,
+    })
+    assert result.vendor.tax_id is None and result.vendor.email is None
+    assert result.customer is None
+    assert result.invoice_number is None and result.due_date is None
+
+
+def test_real_values_are_left_alone():
+    from app.schemas import ExtractionResult
+    from tests.conftest import VALID_SUBMISSION
+
+    result = ExtractionResult.model_validate({
+        **VALID_SUBMISSION,
+        "vendor": {"name": "None Such Ltd", "tax_id": "GB123"},
+        "invoice_number": "NA-2024-1",
+    })
+    assert result.vendor.name == "None Such Ltd"
+    assert result.vendor.tax_id == "GB123"
+    assert result.invoice_number == "NA-2024-1"

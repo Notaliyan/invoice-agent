@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.agent.prompts import VALIDATION_FAILED_NEXT, VALIDATION_PASSED_NEXT
 from app.pdf import Line, PdfDocument
 from app.schemas import ExtractionResult, ValidationCheck, ValidationReport
 
@@ -520,14 +521,7 @@ def tool_validate_amounts(
     return {
         "passed": report.passed,
         "checks": [c.model_dump() for c in report.checks],
-        "next_step": (
-            "All checks passed. Call submit_extraction with exactly these numbers."
-            if report.passed
-            else "One or more checks failed. Re-read the document to find the correct "
-                 "figures, then call validate_amounts again. Only submit numbers that "
-                 "validate - or, if the source document is itself internally "
-                 "inconsistent, say so in `notes` and lower your confidence."
-        ),
+        "next_step": VALIDATION_PASSED_NEXT if report.passed else VALIDATION_FAILED_NEXT,
     }
 
 

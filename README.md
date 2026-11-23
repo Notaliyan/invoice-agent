@@ -224,14 +224,28 @@ committed â€” quality over time lives in git next to the change that caused it â
 and the CLI prints the delta against the previous run:
 
 ```
-field_accuracy           0.948   (+0.021 vs v1-gpt-4o-mini-20241103-101502)
-extraction_completeness  0.991   (+0.000 vs v1-gpt-4o-mini-20241103-101502)
-hallucination_rate       0.012   (-0.006 vs v1-gpt-4o-mini-20241103-101502)
+field_accuracy           0.989   (-0.006 vs v2-gemini-3.5-flash-lite-20261116-233135)
+extraction_completeness  1.000   (+0.000 vs v2-gemini-3.5-flash-lite-20261116-233135)
+hallucination_rate       0.012   (+0.000 vs v2-gemini-3.5-flash-lite-20261116-233135)
 ```
 
-(Illustrative output, not a measured result.) A hash of the prompt text is
-stored with every run as well, so an edit without a version bump still shows
-up as a different fingerprint.
+A hash of the prompt text is stored with every run as well, so an edit without
+a version bump still shows up as a different fingerprint.
+
+The prompt history so far, on `gemini-3.5-flash-lite` (the full record is in
+`history.jsonl`, and the version notes at the top of `prompts.py`):
+
+| Prompt | What changed | Field accuracy | Hallucination rate |
+|---|---|---|---|
+| v1 | First version | 0.978 | 0.035 |
+| v2 | Report what is printed, not what can be inferred | 0.994 | 0.012 |
+| v3 | A document that does not add up keeps its printed figures | 0.989 | 0.012 |
+
+v3's average is a little lower but within run-to-run noise; what it fixed is
+the one failure that matters most for this agent. Under v2, a CI run replaced a
+deliberately wrong printed total with subtotal + tax, because the prompt said
+both "a failed check means your numbers are wrong" and "do not fix the
+document". v3 removes the contradiction and keeps the printed total.
 
 ---
 
